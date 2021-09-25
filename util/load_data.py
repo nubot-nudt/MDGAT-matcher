@@ -101,6 +101,9 @@ def make_dataset_kitti_distance(txt_path, mode):
         elif mode == 'test':
             seq_list = [10]
             # seq_list = range(10)
+
+            ## test for repeatablity
+            # seq_list = [8]
         else:
             raise Exception('Invalid mode.')
 
@@ -142,6 +145,8 @@ class SparseDataset(Dataset):
 
         self.mutual_check = opt.mutual_check
 
+        self.mode = mode
+
         # self.matcher = cv2.BFMatcher_create(cv2.NORM_L1, crossCheck=True)
         # 暴力匹配
         # self.matcher = cv2.BFMatcher_create(cv2.NORM_L1, crossCheck=False)
@@ -162,6 +167,7 @@ class SparseDataset(Dataset):
         self.calib={}
         self.pose={}
         self.pc = {}
+        self.lrf = {}
         for seq in self.seq_list:
             sequence = '%02d'%seq
             calibpath = os.path.join(self.train_path, 'calib/sequences', sequence, 'calib.txt')
@@ -189,6 +195,7 @@ class SparseDataset(Dataset):
         
             if self.memory_is_enough:
                 pcs = []
+                lrfs= []
                 folder = os.path.join(self.train_path,'preprocess-undownsample-n8', sequence)
                 folder = os.listdir(folder)   
                 folder.sort(key=lambda x:int(x[:-4]))
@@ -196,15 +203,19 @@ class SparseDataset(Dataset):
                     # folder = os.path.join(keypoints_path, 'data_odometry_velodyne', 'numpy', '%02d'%seq, np_folder)
                     # folder = os.path.join(keypoints_path, 'sequences', '%02d'%seq, 'velodyne')
                     file = os.path.join(self.keypoints_path, sequence, folder[idx])
+                    lrf_file = os.path.join(self.keypoints_path,'LRF/60-01', sequence, folder[idx])
                     if os.path.isfile(file):
                         pc = np.fromfile(file, dtype=np.float32)
+                        lrf = np.fromfile(lrf_file, dtype=np.float32)
                         pcs.append(pc)
-                        x = pc.reshape((-1, 37))
-                        if x.shape[0] == 256:
-                            print(x)
+                        lrfs.append(lrf)
+                        # x = pc.reshape((-1, 37))
+                        # if x.shape[0] == 256:
+                        #     print(x)
                     else:
                         pcs.append([0])
                 self.pc[sequence] = pcs
+                self.lrf[sequence] = lrfs
 
     def __len__(self):
         if self.train_mode == 'kframe':
@@ -216,132 +227,8 @@ class SparseDataset(Dataset):
         else:
             raise Exception('Invalid train_mode.')
 
-    # ISS
-    def _get_scan_ids(self, pcd):
-        depth = np.linalg.norm(pcd[:, :3], 2, axis=1)
-        pitch = np.arcsin(pcd[:, 2] / depth)
-        fov_down = -24.8 / 180.0 * np.pi
-        fov = (abs(-24.8) + abs(2.0)) / 180.0 * np.pi
-        scan_ids = (pitch + abs(fov_down)) / fov
-        scan_ids *= self.N_SCANS
-        scan_ids = np.floor(scan_ids)
-        scan_ids = np.minimum(self.N_SCANS - 1, scan_ids)
-        scan_ids = np.maximum(0, scan_ids).astype(np.int32)
-        return scan_ids
-    # ISS
-    def reorder_pcd(self, pcd):
-        scan_start = np.zeros(self.N_SCANS, dtype=int)
-        scan_end = np.zeros(self.N_SCANS, dtype=int)
-
-        scan_ids = self._get_scan_ids(pcd)
-        sorted_ind = np.argsort(scan_ids, kind='stable')
-        sorted_pcd = pcd[sorted_ind]
-        sorted_scan_ids = scan_ids[sorted_ind]
-
-        elements, elem_cnt = np.unique(sorted_scan_ids, return_counts=True)
-
-        start = 0
-        for ind, cnt in enumerate(elem_cnt):
-            scan_start[ind] = start
-            start += cnt
-            scan_end[ind] = start
-
-        laser_cloud = np.hstack((sorted_pcd, sorted_scan_ids.reshape((-1, 1))))
-        return laser_cloud, scan_start, scan_end
-
     def __getitem__(self, idx):
-        iss = False
-        if iss :
-            # 提取pc1,pose1,timestamp1,kp1
-            dataset = pykitti.odometry(self.train_path, self.sequence)
-            pc1 = dataset.get_velo(idx)
-            pose1 = dataset.poses[idx]
-            timestamp1 = dataset.timestamps[idx]
-
-            # 当前帧没有在它kframe帧之后的帧用于匹配、训练
-            if idx + self.kframe > len(self) - 1:
-                return{
-                    'keypoints0': torch.zeros([0, 0, 3], dtype=torch.double),
-                    'keypoints1': torch.zeros([0, 0, 3], dtype=torch.double),
-                    'descriptors0': torch.zeros([0, 3], dtype=torch.double),
-                    'descriptors1': torch.zeros([0, 3], dtype=torch.double),
-                    # 'cloud0': pc1,
-                    # 'cloud1': pc1,
-                    # 加上timastamp会报错
-                    # 'timestamp0': timestamp1,
-                    # 'timestamp1': timestamp1,
-                    'idx': idx
-                } 
-
-            # 降采样
-            start = time.time()
-            point_cloud_o3d = o3d.geometry.PointCloud()
-            point_cloud_o3d.points = o3d.utility.Vector3dVector(pc1[:, :3])
-            point_cloud_o3d = point_cloud_o3d.voxel_down_sample(voxel_size=0.01)
-            point_cloud_o3d.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.05, max_nn=30))
-            print('downsample and normals: ', time.time() - start)
-            points = np.asarray(point_cloud_o3d.points)
-            normals = np.asarray(point_cloud_o3d.normals)
-        
-            # points = self.reorder_pcd(points)
-            # sharp_points, sharp_ind = self.extractor.extract_features(points[0], points[1], points[2])
-            # kp1 = np.asarray(sharp_points)
-
-            # ISS特征提取
-            start = time.time()
-            feature_idx, FPFH = iss_descriptor(points, normals)
-            kp1 = np.asarray(pc1[feature_idx])
-            descs1 = FPFH
-            print('ISS and FPFH: ', time.time() - start)
-        
-
-            # 特征点可视化
-            point_cloud_o3d2 = o3d.geometry.PointCloud()
-            point_cloud_o3d2.points = o3d.utility.Vector3dVector(kp1[:256, :3])
-            point_cloud_o3d2.paint_uniform_color([255, 0, 0])
-            point_cloud_o3d.paint_uniform_color([0, 0, 0])
-            o3d.visualization.draw_geometries([point_cloud_o3d, point_cloud_o3d2])
-            
-            # 跳过kframe，作为目标点云
-            idx += self.kframe
-            # 提取pc2,pose2,timestamp2,kp2
-            pc2 = dataset.get_velo(idx)
-            pose2 = dataset.poses[idx]
-            timestamp2 = dataset.timestamps[idx]
-            
-            start = time.time()
-            point_cloud_o3d.points = o3d.utility.Vector3dVector(pc2[:, :3])
-            point_cloud_o3d.voxel_down_sample(voxel_size=0.005)
-            point_cloud_o3d.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.01, max_nn=30))
-
-            points = np.asarray(point_cloud_o3d.points)
-            normals = np.asarray(point_cloud_o3d.normals)
-
-            # points = self.reorder_pcd(points[:, :3])
-            # sharp_points, sharp_ind = self.extractor.extract_features(points[0], points[1], points[2])
-            # kp2 = np.asarray(sharp_points)  
-            
-            # ISS特征提取
-            feature_idx, FPFH = iss_descriptor(points, normals)
-            kp2 = np.asarray(pc2[feature_idx])
-            descs2 = FPFH
-            print('2:downsample+normals ISS and FPFH: ', time.time() - start)
-
-            # #特征点，描述子生成
-            if len(kp1) < 1 or len(kp2) < 1:
-                # print("no kp: ",file_name)
-                return{
-                    'keypoints0': torch.zeros([0, 0, 3], dtype=torch.double),
-                    'keypoints1': torch.zeros([0, 0, 3], dtype=torch.double),
-                    'descriptors0': torch.zeros([0, 3], dtype=torch.double),
-                    'descriptors1': torch.zeros([0, 3], dtype=torch.double),
-                    # 'cloud0': pc1,
-                    # 'cloud1': pc2,
-                    # 'timestamp0': timestamp1,
-                    # 'timestamp1': timestamp2,
-                    'idx': idx
-                }
-                
+       
         begin = time.time()
         if self.train_mode == 'kframe':
             for i, accumulated_sample_num in enumerate(self.accumulated_sample_num_list):
@@ -364,6 +251,12 @@ class SparseDataset(Dataset):
             index_in_seq = self.dataset[idx]['anc_idx']
             index_in_seq2 = self.dataset[idx]['pos_idx']
             seq = self.dataset[idx]['seq']
+
+            ## test for repeatablity
+            # index_in_seq = 2517
+            # index_in_seq2 = 3862
+            # seq = self.dataset[idx]['seq']
+
             # trans = self.dataset[idx]['trans']
             # rot = self.dataset[idx]['rot']
 
@@ -375,6 +268,7 @@ class SparseDataset(Dataset):
         if self.memory_is_enough:
             sequence = sequence = '%02d'%seq
             pc_np1 = self.pc[sequence][index_in_seq]
+            lrf1 = self.lrf[sequence][index_in_seq]
             if self.keypoints == 'sharp' or self.keypoints == 'lessharp':
                 pc_np1 = pc_np1.reshape((-1, 4))
                 pc_np1 = pc_np1[np.argsort(pc_np1[:, 3])[::-1]]  
@@ -383,20 +277,32 @@ class SparseDataset(Dataset):
             else:
                 pc_np1 = pc_np1.reshape((-1, 37))
                 kp1 = pc_np1[:, :3]
+                lrf1 = lrf1.reshape((-1,9))
+                x1 = lrf1[:,:3]
+                y1 = lrf1[:,3:6]
+                z1 = lrf1[:,6:9]
+                lrf1 = np.stack((x1,y1,z1),axis=2)
             score1 = pc_np1[:, 3]
             descs1 = pc_np1[:, 4:]
             # pose1 = dataset.poses[index_in_seq]
             pose1 = self.pose[sequence][index_in_seq] 
 
             pc_np2 = self.pc[sequence][index_in_seq2]
+            lrf2 = self.lrf[sequence][index_in_seq2]
             if self.keypoints == 'sharp' or self.keypoints == 'lessharp':
                 pc_np2 = pc_np2.reshape((-1, 4))
                 pc_np2 = pc_np2[np.argsort(pc_np2[:, 3])[::-1]]
                 kp2 = pc_np2[:, :3]
                 kp2 = kp2[:, [2,0,1]] # curvature
+                
             else:
                 pc_np2 = pc_np2.reshape((-1, 37))
                 kp2 = pc_np2[:, :3]
+                lrf2 = lrf2.reshape((-1,9))
+                x2 = lrf2[:,:3]
+                y2 = lrf2[:,3:6]
+                z2 = lrf2[:,6:9]
+                lrf2 = np.stack((x2,y2,z2),axis=2)
             score2 = pc_np2[:, 3]
             descs2 = pc_np2[:, 4:]
             # pose2 = dataset.poses[index_in_seq2]
@@ -404,8 +310,8 @@ class SparseDataset(Dataset):
 
             T_cam0_velo = self.calib[sequence]
 
-            if pc_np2.shape[0]==256 or pc_np1.shape[0]==256:
-                print('1')
+            # if pc_np2.shape[0]==256 or pc_np1.shape[0]==256:
+            #     print('1')
 
             # q = np.asarray([rot[3], rot[0], rot[1], rot[2]])
             # t = np.asarray(trans)
@@ -419,6 +325,12 @@ class SparseDataset(Dataset):
 
             pc_np_file2 = os.path.join(self.keypoints_path, sequence, '%06d.bin' % (index_in_seq2))
             pc_np2 = np.fromfile(pc_np_file2, dtype=np.float32)
+
+            lrf_file1 = os.path.join(self.keypoints_path,'LRF/60-01', sequence, '%06d.bin' % (index_in_seq))
+            lrf1 = np.fromfile(lrf_file1, dtype=np.float32)
+
+            lrf_file2 = os.path.join(self.keypoints_path,'LRF/60-01', sequence, '%06d.bin' % (index_in_seq2))
+            lrf2 = np.fromfile(lrf_file2, dtype=np.float32)
             
             
             if self.keypoints == 'sharp' or self.keypoints == 'lessharp':
@@ -426,17 +338,30 @@ class SparseDataset(Dataset):
                 pc_np1 = pc_np1[np.argsort(pc_np1[:, 3])[::-1]]
                 kp1 = pc_np1[:, :3]
                 kp1 = kp1[:, [2,0,1]] # curvature
+                
 
                 pc_np2 = pc_np2.reshape((-1, 4))
                 pc_np2 = pc_np2[np.argsort(pc_np2[:, 3])[::-1]]
                 kp2 = pc_np2[:, :3]
                 kp2 = kp2[:, [2,0,1]] # curvature
+                
             else:
                 pc_np1 = pc_np1.reshape((-1, 37))
                 kp1 = pc_np1[:, :3]
+                lrf1 = lrf1.reshape((-1,9))
+                x1 = lrf1[:,:3]
+                y1 = lrf1[:,3:6]
+                z1 = lrf1[:,6:9]
+                lrf1 = np.stack((x1,y1,z1),axis=2)
 
                 pc_np2 = pc_np2.reshape((-1, 37))
                 kp2 = pc_np2[:, :3]
+                lrf2 = lrf2.reshape((-1,9))
+                x2 = lrf2[:,:3]
+                y2 = lrf2[:,3:6]
+                z2 = lrf2[:,6:9]
+                lrf2 = np.stack((x2,y2,z2),axis=2)
+                
                 
             score1 = pc_np1[:, 3]
             descs1 = pc_np1[:, 4:]
@@ -496,7 +421,7 @@ class SparseDataset(Dataset):
             pc1 = pc1.reshape((-1, 8))
             point_cloud_o3d = o3d.geometry.PointCloud()
             point_cloud_o3d.points = o3d.utility.Vector3dVector(pc1[:, :3])
-            # point_cloud_o3d.normals = o3d.utility.Vector3dVector(pc_np[:, 3:6])
+            point_cloud_o3d.normals = o3d.utility.Vector3dVector(pc1[:, 3:6])
             o3d.visualization.draw_geometries([point_cloud_o3d])
 
         vis_keypoints = False
@@ -566,6 +491,7 @@ class SparseDataset(Dataset):
         kp2_np = np.array([(kp[0], kp[1], kp[2], 1) for kp in kp2])
         # 可视化显示原始点云
         vis_registered_pointcloud = False
+        vis_registered_keypoints = False
         if vis_registered_pointcloud:
             # pc1_path = os.path.join(self.preprocessed_path, sequence, '%06d.bin'%index_in_seq)
             # pc1 = np.fromfile(pc1_path, dtype=np.float32)
@@ -588,7 +514,6 @@ class SparseDataset(Dataset):
         scores1_np = np.array(score1) 
         scores2_np = np.array(score2)
 
-        # 根据M将特征点透视变化目标图片
         kp1_np = torch.tensor(kp1_np, dtype=torch.double)
         pose1 = torch.tensor(pose1, dtype=torch.double)
         kp2_np = torch.tensor(kp2_np, dtype=torch.double)
@@ -598,7 +523,6 @@ class SparseDataset(Dataset):
         # relative_pose = torch.tensor(relative_pose.matrix, dtype=torch.double)
 
         # pose是cam0的轨迹真值，需将其转换到velodyne坐标系
-        
         kp1w_np = torch.einsum('ki,ij,jm->mk', pose1, T_cam0_velo, kp1_np.T)
         kp2w_np = torch.einsum('ki,ij,jm->mk', pose2, T_cam0_velo, kp2_np.T)
 
@@ -609,8 +533,8 @@ class SparseDataset(Dataset):
         kp2w_np = kp2w_np[:, :3]
         transtime = time.time()
 
-        vis_registered_keypoints = False
-        if vis_registered_keypoints:
+        
+        if vis_registered_keypoints or vis_registered_pointcloud:
             # 可视化，校准后的特征点
             point_cloud_o3d = o3d.geometry.PointCloud()
             point_cloud_o3d.points = o3d.utility.Vector3dVector(kp1w_np.numpy())
@@ -660,40 +584,24 @@ class SparseDataset(Dataset):
 
         gttime = time.time()
 
-        visualize = False
-        if visualize:
-            matches_dmatch = []
-            for idx in range(matches.shape[0]):
-                dmatch = cv2.DMatch(matches[idx], min2[matches[idx]], 0.0)
-                print("Match {matches[idx]} {min2[matches[idx]]} dist={dists[matches[idx], min2[matches[idx]]]}")
-                matches_dmatch.append(dmatch)
-            out = cv2.drawMatches(image, kp1, warped, kp2, matches_dmatch, None)
-            cv2.imshow('a', out)
-            cv2.waitKey(0)
-
-        # MN = np.concatenate([min1[matches][np.newaxis, :], matches[np.newaxis, :]])
-        # MN2 = np.concatenate([missing1[np.newaxis, :], (len(kp2)) * np.ones((1, len(missing1)), dtype=np.int64)])
-        # MN3 = np.concatenate([(len(kp1)) * np.ones((1, len(missing2)), dtype=np.int64), missing2[np.newaxis, :]])
-        # all_matches = np.concatenate([MN, MN2, MN3], axis=1)
-        '''
-        for idx in range(all_matches.shape[1]):
-            pt1 = all_matches[0, idx]
-            pt2 = all_matches[1, idx]
-            if pt1 != self.nfeatures and pt2 != self.nfeatures:
-                print(f"match: {dists[pt1, pt2]} | {pt2} {np.argmin(dists[pt1, :])} | {pt1} {np.argmin(dists[:, pt2])}")
-            else:
-                print(f"no match {pt1} {pt2}")
-        '''
-        # if kp1_np.shape != kp2_np.shape:
-        #     print(kp1_np.shape, kp2_np.shape)
-        #     print("MN", MN)
-        #     print("MN2", MN2)
-        #     print("MN3", MN3)
-        #     print(" ")
-
-        # return {'kp1': kp1_np / max_size, 'kp2': kp2_np / max_size, 'descs1': descs1 / 256., 'descs2': descs2 / 256., 'matches': all_matches}
         kp1_np = kp1_np[:, :3]
         kp2_np = kp2_np[:, :3]
+
+        ''' augment training data with random rotation'''
+        # if self.mode == 'train':
+        theta=np.random.rand(1)*2*np.pi#0到2*pi的均匀分布
+        R_z = np.array([[math.cos(theta),    -math.sin(theta),    0],
+                [math.sin(theta),    math.cos(theta),     0],
+                [0,                     0,                      1]
+                ])
+        Rt_z = np.array([[math.cos(theta),    -math.sin(theta),    0, 0],
+                [math.sin(theta),    math.cos(theta),     0, 0],
+                [0,                     0,                      1, 0],
+                [0,0,0,1]
+                ])
+        R_z = torch.tensor(R_z, dtype=torch.double)
+        Rt_z = torch.tensor(Rt_z, dtype=torch.double)
+        kp1_np = torch.einsum('ki,ji->jk', R_z, kp1_np)
 
         # 归一化
         norm1, norm2 = np.linalg.norm(descs1, axis=1), np.linalg.norm(descs2, axis=1)
@@ -703,6 +611,7 @@ class SparseDataset(Dataset):
         # descs1, descs2 = descs1.reshape(( -1, 33)), descs2.reshape(( -1, 33))
         descs1, descs2 = torch.tensor(descs1, dtype=torch.double), torch.tensor(descs2, dtype=torch.double)
         scores1_np, scores2_np = torch.tensor(scores1_np, dtype=torch.double), torch.tensor(scores2_np, dtype=torch.double)
+        lrf1, lrf2 = torch.tensor(lrf1, dtype=torch.double), torch.tensor(lrf2, dtype=torch.double)
         # descs1 = np.transpose(descs1 / 256.)
         # descs2 = np.transpose(descs2 / 256.)
         # kp1_np = kp1_np.reshape((1, -1, 3))
@@ -719,17 +628,8 @@ class SparseDataset(Dataset):
         if self.descriptor == 'FPFH' or self.descriptor == 'FPFH_gloabal' or self.descriptor == 'FPFH_only':
             return{
                 # 'skip': False,
-                # 'keypoints0': list(kp1_np),
-                # 'keypoints1': list(kp2_np),
-                # 'descriptors0': list(descs1),
-                # 'descriptors1': list(descs2),
-                # 'scores0': list(scores1_np),
-                # 'scores1': list(scores2_np),
-                # 'match0': list(match1),
-                # 'match1': list(match2),
-                # 'sequence': sequence,
-                # 'idx0': index_in_seq,
-                # 'idx1': index_in_seq2,
+                'lrf0': lrf1,
+                'lrf1': lrf2,
                 'keypoints0': kp1_np,
                 'keypoints1': kp2_np,
                 'descriptors0': descs1,
@@ -746,22 +646,14 @@ class SparseDataset(Dataset):
                 # 'cloud1': pc2,
                 # 'all_matches': list(all_matches),
                 # 'file_name': file_name
-                'rep': rep
+                'rep': rep,
+                'Rt_z': Rt_z
             } 
         else:
             return{
             # 'skip': False,
-            # 'keypoints0': list(kp1_np),
-            # 'keypoints1': list(kp2_np),
-            # 'descriptors0': list(descs1),
-            # 'descriptors1': list(descs2),
-            # 'scores0': list(scores1_np),
-            # 'scores1': list(scores2_np),
-            # 'match0': list(match1),
-            # 'match1': list(match2),
-            # 'sequence': sequence,
-            # 'idx0': index_in_seq,
-            # 'idx1': index_in_seq2,
+            'lrf1': lrf1,
+            'lrf2': lrf2,
             'keypoints0': kp1_np,
             'keypoints1': kp2_np,
             'descriptors0': descs1,

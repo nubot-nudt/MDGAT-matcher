@@ -12,7 +12,6 @@ import torch.multiprocessing
 from tqdm import tqdm
 import time
 
-# sch
 import open3d as o3d
 import pykitti
 # visualize
@@ -22,6 +21,8 @@ from torchvision import transforms
 from tensorboardX import SummaryWriter
 
 from models.superglue import SuperGlue
+from models.r_mdgat import r_MDGAT
+from models.r_mdgat2 import r_MDGAT2
 from models.mdgat import MDGAT
 
 torch.set_grad_enabled(True)
@@ -35,11 +36,10 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     '--sinkhorn_iterations', type=int, default=20,
     help='Number of Sinkhorn iterations performed by SuperGlue')
+
 parser.add_argument(
     '--match_threshold', type=float, default=0.2,
     help='SuperGlue match threshold')
-
-
 
 parser.add_argument(
     '--learning_rate', type=int, default=0.0001,  #0.0001
@@ -49,110 +49,112 @@ parser.add_argument(
     '--epoch', type=int, default=1000,
     help='Number of epoches')
 
-# sch
 parser.add_argument(
     '--kframe', type=int, default=1,
     help='Number of skip frames for training')
 
-parser.add_argument(
-    '--model_out_path', type=str, default='/home/chenghao/Mount/sch_ws/gnn/checkpoint',
-    help='Number of skip frames for training')
 
 parser.add_argument(
     '--train_mode', type=str, default='distance', 
-    help='select train frame by: "kframe", "distance" or "overlap".')
+    help='Select train frame by: "kframe", "distance" or "overlap".')
 
 parser.add_argument(
-    '--memory_is_enough', type=bool, default=True, 
-    help='select train frame by: "kframe", "distance" or "overlap".')
+    '--memory_is_enough', type=bool, default=False, 
+    help='If memory is enough, load all the data')
         
 parser.add_argument(
     '--batch_size', type=int, default=64, #12
-    help='batch_size')
+    help='Batch size')
 
 parser.add_argument(
     '--local_rank', type=int, default=[0,1,2,3], 
-    help='select train frame by: "kframe", "distance" or "overlap".')
+    help='Used gpu label')
 
 parser.add_argument(
     '--resume', type=bool, default=False, # True False
-    help='Number of skip frames for training')
+    help='Resuming from existing model')
 
 parser.add_argument(
     # '--resume_model', type=str, default='/media/chenghao/本地磁盘/sch_ws/gnn/checkpoint/raw9-kNone-superglue-FPFH_only/nomutualcheck-raw-kNone-batch64-distance-superglue-FPFH_only-USIP/best_model_epoch_216(test_loss1.4080408022386168).pth')
-    '--resume_model', type=str, default='/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/raw9-kNone-superglue-FPFH/nomutualcheck-raw-kNone-batch64-distance-superglue-FPFH-USIP/best_model_epoch_480(test_loss0.6900738631042177).pth',
-    help='Number of skip frames for training')
+    '--resume_model', type=str, default=
+    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/mdgat9-k[128, None, 128, None, 64, None, 64, None]-distribution_loss-FPFH/nomutualcheck-mdgat-k[128, None, 128, None, 64, None, 64, None]-batch128-distance-distribution_loss-FPFH-USIP/model_epoch_380.pth',
+    help='Path to model to be Resumed')
 
 
 parser.add_argument(
-    '--net', type=str, default='mdgat', 
-    help='mdgat superglue')
+    '--net', type=str, default='rotatary_mdgat2', 
+    help='Choose net structure : mdgat superglue rotatary_mdgat rotatary_mdgat2')
 
 parser.add_argument(
-    '--loss_method', type=str, default='triplet_loss',
-    help='superglue triplet_loss gap_loss gap_loss2 gap_loss3')
+    '--loss_method', type=str, default='distribution_loss',
+    help='Choose loss function : superglue triplet_loss gap_loss gap_loss_plus distribution_loss')
 
 parser.add_argument(
     '--mutual_check', type=bool, default=False,  # True False
-    help='')
+    help='If perform mutual check')
 
 parser.add_argument(
     '--k', type=int, default=[128, None, 128, None, 64, None, 64, None], 
-    help='FPFH pointnet')
+    # '--k', type=int, default=[], 
+    help='Mdgat structure')
 
 parser.add_argument(
     '--l', type=int, default=9, 
-    help='dgnn layers')
+    help='Layers number')
 
 parser.add_argument(
     '--descriptor', type=str, default='FPFH', 
-    help='FPFH pointnet pointnetmsg FPFH_gloabal FPFH_only')
+    help='Choose keypoint descriptor : FPFH pointnet pointnetmsg FPFH_gloabal FPFH_only')
 # if parser.parse_args().descriptor == 'pointnet' or parser.parse_args().descriptor == 'pointnetmsg':
-parser.add_argument(
-    '--train_step', type=int, default=3,  
-    help='pointnet描述子采用三阶段训练，1,2,3')
 
 parser.add_argument(
     '--keypoints', type=str, default='USIP', 
-    help='sharp USIP lessharp')
+    help='Choose keypoints : sharp USIP lessharp')
 
 parser.add_argument(
     '--threshold', type=float, default=0.5, 
-    help='sharp USIP lessharp')
+    help='Ground truth distance threshold')
 
 parser.add_argument(
     '--ensure_kpts_num', type=bool, default=True, 
-    help='sharp USIP lessharp')
+    help='')
 
 parser.add_argument(
     '--max_keypoints', type=int, default=512,  #1024
-    help='Maximum number of keypoints detected by Superpoint'
+    help='Maximum number of keypoints'
             ' (\'-1\' keeps all keypoints)')
 
 parser.add_argument(
     '--triplet_loss_gamma', type=float, default=0.5,  
-    help='')
+    help='Threshold for triplet loss and gap loss')
 
 parser.add_argument(
     '--dataset', type=str, default='kitti',  
-    help='')
-
+    help='Used dataset')
 
 parser.add_argument(
-    '--train_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry', # MSCOCO2014_yingxin
+    '--train_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry', 
     help='Path to the directory of training imgs.')
 
 parser.add_argument(
-    '--keypoints_path', type=str, default='/home/chenghao/Mount/Dataset/keypoints/curvature_128_FPFH_16384-512-k1k16-2d-nonoise-nonms',
+    '--keypoints_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/keypoints_USIP/tsf_256_FPFH_16384-512-k1k16-2d-nonoise',
     help='Path to the directory of kepoints.')
 
 parser.add_argument(
     '--preprocessed_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/preprocess-undownsample-n8', 
-    help='Path to the directory of kepoints.')
+    help='Path to the directory of preprocessed kitti odometry point cloud.')
 
 parser.add_argument(
     '--txt_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/preprocess-random-full', 
-    help='Path to the directory of kepoints.')
+    help='Path to the directory of pairs.')
+
+parser.add_argument(
+    '--model_out_path', type=str, default='/home/chenghao/Mount/sch_ws/gnn/checkpoint',
+    help='Output model path')
+
+parser.add_argument(
+    '--rotationa_ugment', type=bool, default=True,
+    help='Output model path')
 
 
 
@@ -160,48 +162,48 @@ parser.add_argument(
 if __name__ == '__main__':
     opt = parser.parse_args()
     
-    from load_data import SparseDataset
+    from util.load_data import SparseDataset
 
     
     if opt.net == 'raw':
         opt.k = None
         opt.l = 9
     if opt.mutual_check:
-        model_name = '{}-k{}-batch{}-{}-{}-{}-{}' .format(opt.net, opt.k, opt.batch_size, opt.train_mode, opt.loss_method, opt.descriptor, opt.keypoints)
+        model_name = '{}-batch{}-{}-{}-{}-{}' .format(opt.net, opt.batch_size, opt.train_mode, opt.loss_method, opt.descriptor, opt.keypoints)
     else:
-        model_name = 'nomutualcheck-{}-k{}-batch{}-{}-{}-{}-{}' .format(opt.net, opt.k, opt.batch_size, opt.train_mode, opt.loss_method, opt.descriptor, opt.keypoints)
-    # log日志输出路径
-    log_path = './logs/{}/{}{}-k{}-{}-{}' .format(opt.dataset, opt.net, opt.l, opt.k, opt.loss_method, opt.descriptor)
-    if opt.descriptor == 'pointnet' or opt.descriptor == 'pointnetmsg':
-        log_path = '{}/train_step{}' .format(log_path, opt.train_step)
-    log_path = '{}/{}' .format(log_path,model_name)
+        model_name = 'nomutualcheck-{}-batch{}-{}-{}-{}-{}' .format(opt.net, opt.batch_size, opt.train_mode, opt.loss_method, opt.descriptor, opt.keypoints)
+
+    # 创建模型输出路径
+    if opt.rotationa_ugment ==True:
+        model_out_path = '{}/{}/RotationAug/{}{}-{}-{}'.format(opt.model_out_path, opt.dataset, opt.net, opt.l, opt.loss_method, opt.descriptor)
+    else:
+        model_out_path = '{}/{}/{}{}-{}-{}' .format(opt.model_out_path, opt.dataset, opt.net, opt.l, opt.loss_method, opt.descriptor)
+
+    log_path = '{}/{}/logs'.format(model_out_path,model_name)
     log_path = Path(log_path)
     log_path.mkdir(exist_ok=True, parents=True)
     logger = SummaryWriter(log_path)
-    # logger = Logger(log_path)
-    # 创建模型输出路径
-    model_out_path = '{}/{}/{}{}-k{}-{}-{}' .format(opt.model_out_path, opt.dataset, opt.net, opt.l, opt.k, opt.loss_method, opt.descriptor)
-    if opt.descriptor == 'pointnet' or opt.descriptor == 'pointnetmsg':
-        model_out_path = '{}/train_step{}' .format(model_out_path, opt.train_step)
+
     model_out_path = '{}/{}' .format(model_out_path, model_name)
     model_out_path = Path(model_out_path)
     model_out_path.mkdir(exist_ok=True, parents=True)
 
     print("Train",opt.net,"net with \nStructure k:",opt.k,"\nDescriptor: ",opt.descriptor,"\nLoss: ",opt.loss_method,"\nin Dataset: ",opt.dataset,
-    "\n====================",
-    "\nmodel_out_path: ", model_out_path,
-    "\nlog_path: ",log_path)
+    "\n========================================",
+    "\nmodel_out_path: ", model_out_path)
    
     if opt.resume:        
         path_checkpoint = opt.resume_model  # 断点路径
         checkpoint = torch.load(path_checkpoint)  # 加载断点
         lr = checkpoint['lr_schedule']  # lr = opt.learning_rate # lr = checkpoint['lr_schedule']
-        start_epoch = 1  # 设置开始的epoch  # start_epoch = 1 # start_epoch = checkpoint['epoch'] + 1 
+        start_epoch = checkpoint['epoch'] + 1   # 设置开始的epoch  # start_epoch = 1 # start_epoch = checkpoint['epoch'] + 1 
+        best_epoch = start_epoch
         loss = checkpoint['loss']
-        best_loss = 1
+        best_loss = 0.47428859288757375
     else:
         start_epoch = 1
         best_loss = 1e6
+        best_epoch = None
         lr=opt.learning_rate
     
     config = {
@@ -214,14 +216,18 @@ if __name__ == '__main__':
                 'descriptor': opt.descriptor,
                 'mutual_check': opt.mutual_check,
                 'triplet_loss_gamma': opt.triplet_loss_gamma,
-                'train_step':opt.train_step,
-                'L':opt.l
+                'L':opt.l,
+                'local_rank':opt.local_rank
             }
         }
     
     if opt.net == 'superglue':
         net = SuperGlue(config.get('net', {}))
-    else:
+    elif opt.net == 'rotatary_mdgat':
+        net = r_MDGAT(config.get('net', {}))
+    elif opt.net == 'rotatary_mdgat2':
+        net = r_MDGAT2(config.get('net', {}))
+    elif opt.net == 'mdgat':
         net = MDGAT(config.get('net', {}))
     
     # 参数传入device
@@ -248,11 +254,11 @@ if __name__ == '__main__':
         optimizer = torch.optim.Adam(net.parameters(), lr=config.get('net', {}).get('lr'))
         # @todo: 加载参数会导致训练出错，可能原因是没有导入gpu（但导入之后依然有问题）
         # optimizer.load_state_dict(checkpoint['optimizer'])  # 加载优化器参数
-        print('Resume from:', opt.resume_model, 'at epoch', start_epoch, ',loss', loss, ',lr', lr,'.\nSo far best loss',best_loss,
-        "\n====================")
+        print('Resume from:', opt.resume_model, 'at epoch', start_epoch-1, ',loss', loss, ',lr', lr,'.\nSo far best loss',best_loss,
+        "\n========================================")
     else:
         optimizer = torch.optim.Adam(net.parameters(), lr=lr)
-        print('====================\nStart new training')
+        print('========================================\nStart new training')
 
 
     train_set = SparseDataset(opt, 'train')
@@ -283,9 +289,7 @@ if __name__ == '__main__':
                         pred[k] = Variable(torch.stack(pred[k]).to(device))
                     # print(type(pred[k]))   #pytorch.tensor
             
-            prepare_time = time.time()
             data = net(pred) # 匹配结果
-            gnn_time = time.time()
 
             # 去除头字符，将匹配结果和源数据拼接
             for k, v in pred.items(): # pred.items() 返回可遍历的元组数组
@@ -307,29 +311,6 @@ if __name__ == '__main__':
             Loss.backward()
             optimizer.step()
             # lr_schedule.step()
-            backprapogation_time = time.time()
-            
-            # print('prepare time {}, gnn_time {}, backprapogation_time: {}' 
-            #         .format( prepare_time-begin, gnn_time-prepare_time, backprapogation_time-gnn_time))  
-            # begin = time.time()
-                
-            # iter = len(train_loader)*(epoch-1) + i + 1
-            # if (iter) % 10 == 0:
-            #     mean_loss = torch.mean(torch.stack(mean_loss))
-            #     print ('Epoch [{}/{}], Step [{}/{}], mean Loss: {:.4f}， Learning rate: {}' 
-            #         .format(epoch, opt.epoch, i+1, len(train_loader), mean_loss.item(), optimizer.state_dict()['param_groups'][0]['lr']))   
-                
-            #     # ================================================================== #
-            #     #                        Tensorboard Logging                         #
-            #     # ================================================================== #
-            #     # info = { 'train_loss': mean_loss.item(), 'learning rate':optimizer.state_dict()['param_groups'][0]['lr'] }
-            #     # for tag, value in info.items():#debug
-            #     #     logger.scalar_summary(tag, value, iter*opt.batch_size)
-            #     # logger.add_scalars('train_loss': mean_loss.item(),iter*opt.batch_size,'learning rate':optimizer.state_dict()['param_groups'][0]['lr']})
-                
-            #     # mean_loss.backward()
-            #     # optimizer.step()
-            #     mean_loss = []
 
             # 删除变量释放显存
             del Loss, pred, data, i
@@ -370,7 +351,9 @@ if __name__ == '__main__':
             # 保存eval中loss最小的网络W
             mean_val_loss = torch.mean(torch.stack(mean_val_loss)).item()
             epoch_loss /= len(train_loader)
-            print('Validation loss: {:.4f}, epoch_loss: {:.4f},  best val loss: {:.4f}' .format(mean_val_loss, epoch_loss, best_loss))
+
+            print('Epoch [{}/{}] done, validation loss: {:.4f}, former best val loss: {:.4f} at epoch {}, epoch_loss: {:.4f}' 
+            .format(epoch, opt.epoch, mean_val_loss, best_loss, best_epoch, epoch_loss))
             checkpoint = {
                     "net": net.state_dict(),
                     'optimizer':optimizer.state_dict(),
@@ -380,22 +363,23 @@ if __name__ == '__main__':
                 }
             if (mean_val_loss <= best_loss + 1e-5): 
                 best_loss = mean_val_loss
+                best_epoch = epoch
                 model_out_fullpath = "{}/best_model_epoch_{}(val_loss{}).pth".format(model_out_path, epoch, best_loss)
                 torch.save(checkpoint, model_out_fullpath)
-                print('time consume: {:.1f}s, So far best loss: {:.4f}, Checkpoint saved to {}' .format(timeconsume, best_loss, model_out_fullpath))
+                print('New best model!!!, so far best loss: {:.4f}, Checkpoint saved to {}' .format(best_loss, model_out_fullpath))
             else:
                 model_out_fullpath = "{}/model_epoch_{}.pth".format(model_out_path, epoch)
                 torch.save(checkpoint, model_out_fullpath)
-                print("Epoch [{}/{}] done. Epoch Loss {:.4f}. Checkpoint saved to {}"
-                    .format(epoch, opt.epoch, epoch_loss, model_out_fullpath))
+                # print("Epoch [{}/{}] done. Epoch Loss {:.4f}. Checkpoint saved to {}"
+                #     .format(epoch, opt.epoch, epoch_loss, model_out_fullpath))
 
             # ================================================================== #
             #                        Tensorboard Logging                         #
             # ================================================================== #
             logger.add_scalar('Train/val_loss',mean_val_loss,epoch)
             logger.add_scalar('Train/epoch_loss',epoch_loss,epoch)
-            print("log file saved to {}\n"
-                .format(log_path))
+            # print("log file saved to {}\n"
+            #     .format(log_path))
 
 
         # if epoch%10 == 0 and epoch > 0:

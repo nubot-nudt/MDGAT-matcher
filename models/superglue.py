@@ -178,7 +178,6 @@ class KeypointEncoder(nn.Module):
         # inputs = [kpts.transpose(1, 2)]
         return self.encoder(torch.cat(inputs, dim=1))
 
-#sch
 class DescriptorEncoder(nn.Module):
     """ Joint encoding of visual appearance and location using MLPs"""
     def __init__(self, feature_dim, layers):
@@ -218,20 +217,6 @@ class DescriptorGloabalEncoder(nn.Module):
         desc = torch.cat([desc, gloab], 1)
         desc = self.encoder2(desc)
         return desc
-
-# class pointnetDescriptorEncoder(nn.Module):
-#     """ Joint encoding of visual appearance and location using MLPs"""
-#     def __init__(self, feature_dim, layers):
-#         super().__init__()
-#         self.encoder = MLP([128, 128, 128] + [feature_dim])
-#         nn.init.constant_(self.encoder[-1].bias, 0.0)
-
-#     # def forward(self, kpts, scores):
-#     def forward(self, kpts):
-#         # 调换1,2维度
-#         # inputs = [kpts.transpose(1, 2), scores.unsqueeze(1)]
-#         inputs = [kpts]
-#         return self.encoder(torch.cat(inputs, dim=1))
 
 # gloabal aware
 class pointnetDescriptorEncoder(nn.Module):
@@ -423,25 +408,12 @@ class SuperGlue(nn.Module):
         self.loss_method = config['loss_method']
         self.mutual_check = config['mutual_check']
         self.triplet_loss_gamma = config['triplet_loss_gamma']
-        self.train_step = config['train_step']
+        # self.train_step = config['train_step']
 
-
-        # assert self.config['weights'] in ['indoor', 'outdoor']
-        # path = Path(__file__).parent
-        # path = path / 'weights/superglue_{}.pth'.format(self.config['weights'])
-        # self.load_state_dict(torch.load(path))
-        # print('Loaded SuperGlue model (\"{}\" weights)'.format(
-        #     self.config['weights']))
 
     def forward(self, data):
         """Run SuperGlue on a pair of keypoints and descriptors"""
         kpts0, kpts1 = data['keypoints0'].double(), data['keypoints1'].double()
-
-        # desc0 = desc0.transpose(0,1) #第0轴和第1轴交换
-        # desc1 = desc1.transpose(0,1)
-
-        # kpts0 = kpts0.transpose(0,1)  
-        # kpts1 = kpts1.transpose(0,1)
     
         if kpts0.shape[1] == 0 or kpts1.shape[1] == 0:  # no keypoints
             shape0, shape1 = kpts0.shape[:-1], kpts1.shape[:-1]
@@ -472,36 +444,36 @@ class SuperGlue(nn.Module):
             desc0, desc1 = self.gnn(desc0, desc1)
             # Final MLP projection.
             mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
-        elif self.descriptor == 'pointnet' or self.descriptor == 'pointnetmsg':
-            # begin = time.time()
-            pc0, pc1 = data['cloud0'].double(), data['cloud1'].double()
-            desc0 = self.penc(pc0, kpts0, data['scores0']) 
-            desc1 = self.penc(pc1, kpts1, data['scores1']) 
-            # print('encoder',time.time() - begin)
-            """
-            3-step训练
-            """
-            if self.train_step == 1:
-                 # 只更新pointnet
-                mdesc0, mdesc1 = desc0, desc1
-            elif self.train_step == 2:  
-                # 不更新pointnet
-                desc0, desc1 = desc0.detach(), desc1.detach()
-                desc0 = self.denc(desc0) + self.kenc(kpts0, data['scores0'])
-                desc1 = self.denc(desc1) + self.kenc(kpts1, data['scores1'])
-                # Multi-layer Transformer network.
-                desc0, desc1 = self.gnn(desc0, desc1)
-                # Final MLP projection.
-                mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
-            elif self.train_step == 3: 
-                desc0 = self.denc(desc0) + self.kenc(kpts0, data['scores0'])
-                desc1 = self.denc(desc1) + self.kenc(kpts1, data['scores1'])
-                # Multi-layer Transformer network.
-                desc0, desc1 = self.gnn(desc0, desc1)
-                # Final MLP projection.
-                mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
-            else:
-                raise Exception('Invalid train_step.')
+        # elif self.descriptor == 'pointnet' or self.descriptor == 'pointnetmsg':
+        #     # begin = time.time()
+        #     pc0, pc1 = data['cloud0'].double(), data['cloud1'].double()
+        #     desc0 = self.penc(pc0, kpts0, data['scores0']) 
+        #     desc1 = self.penc(pc1, kpts1, data['scores1']) 
+        #     # print('encoder',time.time() - begin)
+        #     """
+        #     3-step训练
+        #     """
+        #     if self.train_step == 1:
+        #          # 只更新pointnet
+        #         mdesc0, mdesc1 = desc0, desc1
+        #     elif self.train_step == 2:  
+        #         # 不更新pointnet
+        #         desc0, desc1 = desc0.detach(), desc1.detach()
+        #         desc0 = self.denc(desc0) + self.kenc(kpts0, data['scores0'])
+        #         desc1 = self.denc(desc1) + self.kenc(kpts1, data['scores1'])
+        #         # Multi-layer Transformer network.
+        #         desc0, desc1 = self.gnn(desc0, desc1)
+        #         # Final MLP projection.
+        #         mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
+        #     elif self.train_step == 3: 
+        #         desc0 = self.denc(desc0) + self.kenc(kpts0, data['scores0'])
+        #         desc1 = self.denc(desc1) + self.kenc(kpts1, data['scores1'])
+        #         # Multi-layer Transformer network.
+        #         desc0, desc1 = self.gnn(desc0, desc1)
+        #         # Final MLP projection.
+        #         mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
+        #     else:
+        #         raise Exception('Invalid train_step.')
         elif self.descriptor == 'FPFH_only':
             desc0, desc1 = data['descriptors0'].double(), data['descriptors1'].double()
 
@@ -596,60 +568,6 @@ class SuperGlue(nn.Module):
                     loss_tn = torch.cat((loss_tn, loss))
             loss_mean = torch.mean((-loss_tp - loss_tn)/(xx+m))
             loss_all = torch.mean(torch.cat((loss_tp.view(-1), loss_all)))
-
-            # bb = time.time()
-            # loss_mean2 = 0
-            # loss22 =[]
-            # loss33 =[]
-            # for batch1 in range(len(gt_matches0)):
-            #     loss2 =[]
-            #     loss3 =[]
-            #     for i in range(len(gt_matches0[batch1])):
-            #         x = i
-            #         y = gt_matches0[batch1][i]
-            #         # 匹配点的loss
-            #         loss2.append(-torch.log(scores[batch1][x][y].exp())) # check batch size == 1 ?
-            #     # matches1中没有统计的无匹配点
-            #     loss22.append(torch.sum(torch.stack(loss2)))                                                                                                    
-            #     for i in range(len(gt_matches1[batch1])):
-            #         x = gt_matches1[batch1][i]
-            #         y = i
-            #         if x == -1:
-            #             loss2.append(-torch.log(scores[batch1][x][y].exp())) 
-            #             loss3.append(-torch.log(scores[batch1][x][y].exp()))
-            #     loss_mean2 += torch.mean(torch.stack(loss2))
-            # # loss_mean = torch.mean(torch.stack(loss2))
-            #     # loss22.append(torch.sum(torch.stack(loss2)))
-            #     loss33.append(torch.sum(torch.stack(loss3)))
-            # loss_mean2 = loss_mean2/b
-            # cc = time.time()
-            # print(bb-aa,' ',cc-bb)
-            # print()
-        elif self.loss_method == 'mine':
-            loss_tn = []
-            loss_tp = []
-            loss_mean = 0
-            
-            for b in range(len(gt_matches0)):
-                for i in range(len(gt_matches0[b])):
-                    x = i
-                    y = gt_matches0[b][i]
-                    if y == -1:
-                        loss_tn.append(-torch.log(scores[b][x][y].exp()))
-                    else:
-                        loss_tp.append(-torch.log(scores[b][x][y].exp())) # check batch size == 1 ?
-                # matches1中没有统计的无匹配点                                                                                                    
-                for i in range(len(gt_matches1[b])):
-                    x = gt_matches1[b][i]
-                    y = i
-                    if x == -1:
-                        loss_tn.append(-torch.log(scores[b][x][y].exp()))  
-                    else:
-                        loss_tp.append(-torch.log(scores[b][x][y].exp())) # check batch size == 1 ?
-                # loss_mean += (torch.mean(torch.stack(loss_tn)) + torch.mean(torch.stack(loss_tp)))/2
-            # @todo: 动态的loss比重 
-            # loss_mean = loss_mean/len(gt_matches0)
-            loss_mean = (torch.mean(torch.stack(loss_tn)) + torch.mean(torch.stack(loss_tp)))/2
         elif self.loss_method == 'triplet_loss':
             b, n = gt_matches0.size()
             _, m = gt_matches1.size()
@@ -686,46 +604,7 @@ class SuperGlue(nn.Module):
             active_percentage = torch.mean((before_clamp_loss > 0).float(), dim=1, keepdim=False)
             triplet_loss = torch.clamp(before_clamp_loss, min=0)
             loss_mean = torch.mean(triplet_loss)
-            
-            # gt_matches0[gt_matches0 == m] = -1
-            # gt_matches1[gt_matches1 == n] = -1
-            # bb=time.time()
 
-            # loss_anc_pos1 = []
-            # loss_anc_neg1 = []
-            # for b in range(len(gt_matches0)):
-            #     for i in range(len(gt_matches0[b])):
-            #         x = i
-            #         y = gt_matches0[b][i]
-            #         loss_anc_pos1.append(-torch.log(scores[b][x][y].exp()))
-
-            #         if y == -1:
-            #             y = len(scores[b])-1
-            #         if max0[b][x][0] == y:
-            #             loss_anc_neg1.append(-torch.log(scores[b][x][max0[b][x][1]].exp()))
-            #         else:
-            #             loss_anc_neg1.append(-torch.log(scores[b][x][max0[b][x][0]].exp()))
-
-            #     # matches1中没有统计的无匹配点                                                                                                    
-            #     for i in range(len(gt_matches1[b])):
-            #         x = gt_matches1[b][i]
-            #         y = i
-            #         loss_anc_pos1.append(-torch.log(scores[b][x][y].exp()))
-            #         if x == -1:
-            #             x = len(scores[b])-1
-            #         if max1[b][0][y] == x:
-            #             loss_anc_neg1.append(-torch.log(scores[b][max1[b][1][y]][y].exp()))
-            #         else:
-            #             loss_anc_neg1.append(-torch.log(scores[b][max1[b][0][y]][y].exp()))
-
-                # loss_mean += loss_anc_pos1 - loss_anc_neg1 + self.triple_loss_gamma
-            # @todo: 动态的loss比重 
-            # loss_mean = loss_mean/len(gt_matches0)
-            # loss_mean = (torch.mean(torch.stack(loss_tn)) + torch.mean(torch.stack(loss_tp)))/2
-            # loss_mean = torch.reshape(loss_mean, (1, -1))
-            # cc=time.time()
-            # print(bb-aa,' ',cc-bb)
-            # print(' ')
         elif self.loss_method == 'gap_loss':
             b, n = gt_matches0.size()
             _, m = gt_matches1.size()

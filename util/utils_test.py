@@ -6,7 +6,7 @@ import pykitti
 # import teaserpp_python
 
 
-def calculate_error(mkpts0, mkpts1, pred, path, b):
+def calculate_error(mkpts0, mkpts1, pred, path, b, Rt_z):
     T = solve_icp(mkpts1, mkpts0)
     # T = solve_teaser(mkpts1, mkpts0)
 
@@ -15,7 +15,7 @@ def calculate_error(mkpts0, mkpts1, pred, path, b):
     pose0 = torch.tensor(dataset.poses[pred['idx0'][b]], dtype=torch.double)
     pose1 = torch.tensor(dataset.poses[pred['idx1'][b]], dtype=torch.double)
     T_cam0_velo = torch.tensor(dataset.calib.T_cam0_velo, dtype=torch.double)
-    T_gt = torch.einsum('ab,bc,cd,de->ae', torch.inverse(T_cam0_velo), torch.inverse(pose0), pose1, T_cam0_velo)
+    T_gt = torch.einsum('ra, ab,bc,cd,de->re', Rt_z.cpu(), torch.inverse(T_cam0_velo), torch.inverse(pose0), pose1, T_cam0_velo)
     trans_gt = np.linalg.norm(T_gt[:3, 3])
     f_theta = (T_gt[0, 0] + T_gt[1, 1] + T_gt[2, 2] -1) * 0.5
     f_theta = max(min(f_theta, 1), -1)  #控制在(-1,1)区间内
@@ -106,7 +106,7 @@ def point2inch(x):
     return x / 72.
 
 
-def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, matches, mconf, true_positive, false_positive, T):
+def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, matches, mconf, true_positive, false_positive, T, radius):
 	
     pc0 = pc0[pc0[:,2]>-3]
     pc1 = pc1[pc1[:,2]>-3]
@@ -130,7 +130,7 @@ def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, mat
     pcd_source_keypoints3, pcd_target_keypoints3 = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
     pcd_source_keypoints3.points, pcd_target_keypoints3.points = o3d.utility.Vector3dVector(pc0[:,:3]), o3d.utility.Vector3dVector(pc1[:,:3])
 
-    translation = np.asarray([0, 10, 0])
+    translation = np.asarray([0, 40, 0])
     pcd_source_keypoints_shifted = pcd_source_keypoints.translate(translation)
     pcd_target_keypoints_shifted = pcd_target_keypoints.translate(-translation)
     translation2 = np.asarray([300, 0, 0])
@@ -160,7 +160,7 @@ def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, mat
     correspondences, correspondences2 =([[i, i + N] for i in np.arange(N)]), ([[i, i + N2] for i in np.arange(N2)])
     correspondences3, correspondences4 =([[i, i + N3] for i in np.arange(N3)]), ([[i, i + N4] for i in np.arange(N4)])
     colors = [[1-i, i, 0.2] for i in mconf]
-    colors2 = [[1, 0, 0.2] for i in range(N2)]
+    colors2 = [[0, 1, 0.2] for i in range(N2)]
     t_colors = [[0, 1, 0.2] for i in range(N3)]
     n_colors = [[1, 0, 0.2] for i in range(N4)]
     correspondence_set = o3d.geometry.LineSet(
@@ -179,21 +179,6 @@ def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, mat
         points = o3d.utility.Vector3dVector(n_points3),
         lines = o3d.utility.Vector2iVector(correspondences4),
     )
-    correspondence_set.colors = o3d.utility.Vector3dVector(colors)
-    correspondence_set2.colors = o3d.utility.Vector3dVector(colors2)
-    correspondence_set3.colors = o3d.utility.Vector3dVector(t_colors)
-    correspondence_set4.colors = o3d.utility.Vector3dVector(n_colors)
-
-    correspondence_mesh = LineMesh(np.array(points), correspondences, colors, radius=0.1)
-    correspondence_mesh2 = LineMesh(np.array(points2), correspondences2, colors2, radius=0.1)
-    correspondence_mesh3 = LineMesh(np.array(t_points3), correspondences3, t_colors, radius=0.1)
-    correspondence_mesh4 = LineMesh(np.array(n_points3), correspondences4, n_colors, radius=0.1)
-    line_mesh_geoms = correspondence_mesh.cylinder_segments
-    line_mesh2_geoms = correspondence_mesh2.cylinder_segments
-    line_mesh3_geoms = correspondence_mesh3.cylinder_segments
-    line_mesh4_geoms = correspondence_mesh4.cylinder_segments
-
-
 
     # pcd_source_keypoints_shifted.paint_uniform_color([0.15, 0.15, 0.8]) 
     # pcd_source_keypoints_shifted2.paint_uniform_color([0.15, 0.8, 0.15]), pcd_source_keypoints_shifted3.paint_uniform_color([0.15, 0.15, 0.8])
@@ -201,18 +186,76 @@ def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, mat
     # pcd_target_keypoints_shifted2.paint_uniform_color([0.15, 0.8, 0.15]), pcd_target_keypoints_shifted3.paint_uniform_color([0.15, 0.15, 0.8])
     pcd_keypoints.paint_uniform_color([1.0, 0.0, 0.0]), pcd_keypoints2.paint_uniform_color([1.0, 0.0, 0.0])
     pcd_keypoints3.paint_uniform_color([1.0, 0.0, 0.0]), pcd_keypoints4.paint_uniform_color([1.0, 0.0, 0.0])
-    # o3d.visualization.RenderOption.line_width=8
 
-    o3d.visualization.draw_geometries([
-                                        pcd_source_keypoints_shifted, correspondence_set, pcd_keypoints, pcd_target_keypoints_shifted, 
-                                        pcd_source_keypoints_shifted2, correspondence_set2, pcd_keypoints2, pcd_target_keypoints_shifted2, 
-                                        pcd_source_keypoints_shifted3, correspondence_set3, correspondence_set4, pcd_keypoints3, pcd_keypoints4,  pcd_target_keypoints_shifted3, 
-                                        ])
+    
+    ## draw with line, cannot change line width
     # o3d.visualization.draw_geometries([
-    #                                     pcd_source_keypoints_shifted, *line_mesh_geoms, pcd_keypoints, pcd_target_keypoints_shifted, 
-    #                                     pcd_source_keypoints_shifted2, *line_mesh2_geoms, pcd_keypoints2, pcd_target_keypoints_shifted2, 
-    #                                     pcd_source_keypoints_shifted3, *line_mesh3_geoms, *line_mesh4_geoms, pcd_keypoints3, pcd_keypoints4,  pcd_target_keypoints_shifted3, 
+    #                                     pcd_source_keypoints_shifted, correspondence_set, pcd_keypoints, pcd_target_keypoints_shifted, 
+    #                                     pcd_source_keypoints_shifted2, correspondence_set2, pcd_keypoints2, pcd_target_keypoints_shifted2, 
+    #                                     pcd_source_keypoints_shifted3, correspondence_set3, correspondence_set4, pcd_keypoints3, pcd_keypoints4,  pcd_target_keypoints_shifted3, 
     #                                     ])
+
+    correspondence_mesh = LineMesh(np.array(points), correspondences, colors, radius=radius)
+    correspondence_mesh2 = LineMesh(np.array(points2), correspondences2, colors2, radius=radius)
+    correspondence_mesh3 = LineMesh(np.array(t_points3), correspondences3, t_colors, radius=radius)
+    correspondence_mesh4 = LineMesh(np.array(n_points3), correspondences4, n_colors, radius=radius)
+    line_mesh_geoms = correspondence_mesh.cylinder_segments
+    line_mesh2_geoms = correspondence_mesh2.cylinder_segments
+    line_mesh3_geoms = correspondence_mesh3.cylinder_segments
+    line_mesh4_geoms = correspondence_mesh4.cylinder_segments
+
+    ## draw keypoints with sphere
+    box_list1 = []
+    for i in range(kpts0.shape[0]):
+        mesh_box = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box.translate(kpts0[i].reshape([3, 1]))
+        mesh_box.translate(translation)
+        mesh_box.paint_uniform_color([1, 0, 0])
+
+        mesh_box2 = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box2.translate(kpts0[i].reshape([3, 1]))
+        mesh_box2.translate(translation+translation2)
+        mesh_box2.paint_uniform_color([1, 0, 0])
+
+        mesh_box3 = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box3.translate(kpts0[i].reshape([3, 1]))
+        mesh_box3.translate(translation+translation3)
+        mesh_box3.paint_uniform_color([1, 0, 0])
+        box_list1.append(mesh_box)
+        box_list1.append(mesh_box2)
+        box_list1.append(mesh_box3)
+    
+    box_list2 = []
+    for i in range(kpts1.shape[0]):
+        mesh_box = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box.translate(kpts1[i].reshape([3, 1]))
+        mesh_box.translate(-translation)
+        mesh_box.paint_uniform_color([1, 0, 0])
+
+        mesh_box2 = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box2.translate(kpts1[i].reshape([3, 1]))
+        mesh_box2.translate(-translation+translation2)
+        mesh_box2.paint_uniform_color([1, 0, 0])
+
+        mesh_box3 = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box3.translate(kpts1[i].reshape([3, 1]))
+        mesh_box3.translate(-translation+translation3)
+        mesh_box3.paint_uniform_color([1, 0, 0])
+        box_list2.append(mesh_box)
+        box_list2.append(mesh_box2)
+        box_list2.append(mesh_box3)
+    
+    ## draw line with triangular mesh
+    o3d.visualization.draw_geometries([
+                                        pcd_source_keypoints_shifted, *line_mesh_geoms, pcd_keypoints, pcd_target_keypoints_shifted, 
+                                        pcd_source_keypoints_shifted2, *line_mesh2_geoms, pcd_keypoints2, pcd_target_keypoints_shifted2, 
+                                        pcd_source_keypoints_shifted3, *line_mesh3_geoms, *line_mesh4_geoms, pcd_keypoints3, pcd_keypoints4,  pcd_target_keypoints_shifted3, 
+                                        ]+box_list1+ box_list2)
+    
+    
+    # o3d.visualization.draw_geometries([
+    #                                     pcd_source_keypoints_shifted3, pcd_target_keypoints_shifted3
+    #                                     ]+box_list1+ box_list2)
 
 
 
@@ -297,7 +340,7 @@ class LineMesh(object):
             if axis is not None:
                 axis_a = axis * angle
                 cylinder_segment = cylinder_segment.rotate(
-                    R=o3d.geometry.get_rotation_matrix_from_axis_angle(axis_a), center=True)
+                    R=np.array(o3d.geometry.get_rotation_matrix_from_axis_angle(axis_a)))
                 # cylinder_segment = cylinder_segment.rotate(
                 #   axis_a, center=True, type=o3d.geometry.RotationType.AxisAngle)
             # color cylinder
