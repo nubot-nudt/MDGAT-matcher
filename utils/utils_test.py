@@ -1,18 +1,16 @@
 import numpy as np
 import open3d as o3d
 import torch
-import pykitti
-import teaserpp_python
+# import teaserpp_python
 
 
 def calculate_error(mkpts0, mkpts1, pred, path, b):
     T = solve_icp(mkpts1, mkpts0)
     # T = solve_teaser(mkpts1, mkpts0)
     T = torch.tensor(T, dtype=torch.double)
-    dataset = pykitti.odometry(path, pred['sequence'][b])
-    pose0 = torch.tensor(dataset.poses[pred['idx0'][b]], dtype=torch.double)
-    pose1 = torch.tensor(dataset.poses[pred['idx1'][b]], dtype=torch.double)
-    T_cam0_velo = torch.tensor(dataset.calib.T_cam0_velo, dtype=torch.double)
+    pose0 = torch.tensor(pred['pose1'][b].cpu().detach().numpy(), dtype=torch.double)
+    pose1 = torch.tensor(pred['pose2'][b].cpu().detach().numpy(), dtype=torch.double)
+    T_cam0_velo = torch.tensor(pred['T_cam0_velo'][b].cpu().detach().numpy(), dtype=torch.double)
     T_gt = torch.einsum('ab,bc,cd,de->ae', torch.inverse(T_cam0_velo), torch.inverse(pose0), pose1, T_cam0_velo)
     trans_gt = np.linalg.norm(T_gt[:3, 3])
     f_theta = (T_gt[0, 0] + T_gt[1, 1] + T_gt[2, 2] -1) * 0.5
@@ -78,42 +76,42 @@ def solve_icp(P, Q):
 
     return T
 
-def solve_teaser(P, Q):
-    """
-    Solve Teaser
+# def solve_teaser(P, Q):
+#     """
+#     Solve Teaser
 
-    Parameters
-    ----------
-    P: numpy.ndarray
-        source point cloud as N-by-3 numpy.ndarray
-    Q: numpy.ndarray
-        target point cloud as N-by-3 numpy.ndarray
+#     Parameters
+#     ----------
+#     P: numpy.ndarray
+#         source point cloud as N-by-3 numpy.ndarray
+#     Q: numpy.ndarray
+#         target point cloud as N-by-3 numpy.ndarray
 
-    Returns
-    ----------
-    T: transform matrix as 4-by-4 numpy.ndarray
-        transformation matrix from one-step ICP
+#     Returns
+#     ----------
+#     T: transform matrix as 4-by-4 numpy.ndarray
+#         transformation matrix from one-step ICP
 
-    """
-    solver_params = teaserpp_python.RobustRegistrationSolver.Params()
-    solver_params.cbar2 = 1
-    solver_params.noise_bound = 0.01
-    solver_params.estimate_scaling = False
-    solver_params.rotation_estimation_algorithm = teaserpp_python.RobustRegistrationSolver.ROTATION_ESTIMATION_ALGORITHM.GNC_TLS
-    solver_params.rotation_gnc_factor = 1.4
-    solver_params.rotation_max_iterations = 100
-    solver_params.rotation_cost_threshold = 1e-12
-    # print("Parameters are:", solver_params)
-    solver = teaserpp_python.RobustRegistrationSolver(solver_params)
-    solver.solve(P.T, Q.T)
+#     """
+#     solver_params = teaserpp_python.RobustRegistrationSolver.Params()
+#     solver_params.cbar2 = 1
+#     solver_params.noise_bound = 0.01
+#     solver_params.estimate_scaling = False
+#     solver_params.rotation_estimation_algorithm = teaserpp_python.RobustRegistrationSolver.ROTATION_ESTIMATION_ALGORITHM.GNC_TLS
+#     solver_params.rotation_gnc_factor = 1.4
+#     solver_params.rotation_max_iterations = 100
+#     solver_params.rotation_cost_threshold = 1e-12
+#     # print("Parameters are:", solver_params)
+#     solver = teaserpp_python.RobustRegistrationSolver(solver_params)
+#     solver.solve(P.T, Q.T)
 
-    solution = solver.getSolution()
+#     solution = solver.getSolution()
 
-    T = np.zeros((4, 4))
-    T[0:3, 0:3] = solution.rotation
-    T[0:3, 3] = solution.translation
-    T[3, 3] = 1.0
-    return T
+#     T = np.zeros((4, 4))
+#     T[0:3, 0:3] = solution.rotation
+#     T[0:3, 3] = solution.translation
+#     T[3, 3] = 1.0
+#     return T
 
 def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, matches, mconf, true_positive, false_positive, T, radius):
 	

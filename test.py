@@ -20,6 +20,10 @@ parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
 parser.add_argument(
+    '--visualize', type=bool, default=False,
+    help='Visualize the matches')
+
+parser.add_argument(
     '--vis_line_width', type=float, default=0.2,
     help='the width of the match line open3d visualization')
 
@@ -116,10 +120,9 @@ parser.add_argument(
     '--sinkhorn_iterations', type=int, default=20,
     help='Number of Sinkhorn iterations performed by SuperGlue')
 
-if parser.parse_args().descriptor == 'pointnet' or parser.parse_args().descriptor == 'pointnetmsg':
-    parser.add_argument(
-        '--train_step', type=int, default=3,  
-        help='Training step using pointnet: 1,2,3')
+parser.add_argument(
+    '--train_step', type=int, default=3,  
+    help='Training step when using pointnet: 1,2,3')
 
 if __name__ == '__main__':
     opt = parser.parse_args()
@@ -155,7 +158,7 @@ if __name__ == '__main__':
     net.load_state_dict(checkpoint['net']) 
     start_epoch = checkpoint['epoch'] + 1  
     best_loss = checkpoint['loss']
-    print('Resume from ', opt.resume_model, 'at epoch ', start_epoch, ',loss', best_loss, ',lr', config.get('net', {}).get('lr'))
+    print('Resume from ', opt.resume_model)
 
     
     if torch.cuda.is_available():
@@ -201,10 +204,13 @@ if __name__ == '__main__':
             
 
             for b in range(len(pred['idx0'])):
-                pc0_path = os.path.join(opt.preprocessed_path, pred['sequence'][b], '%06d.bin'%pred['idx0'][b])
-                pc1_path = os.path.join(opt.preprocessed_path, pred['sequence'][b], '%06d.bin'%pred['idx1'][b])
-                pc0, pc1 = np.fromfile(pc0_path, dtype=np.float32), np.fromfile(pc1_path, dtype=np.float32)
-                pc0, pc1 = pc0.reshape(-1, 8), pc1.reshape(-1, 8)
+                '''If you got KITTI dataset, load the point cloud for better visualization'''
+                # pc0_path = os.path.join(opt.preprocessed_path, pred['sequence'][b], '%06d.bin'%pred['idx0'][b])
+                # pc1_path = os.path.join(opt.preprocessed_path, pred['sequence'][b], '%06d.bin'%pred['idx1'][b])
+                # pc0, pc1 = np.fromfile(pc0_path, dtype=np.float32), np.fromfile(pc1_path, dtype=np.float32)
+                # pc0, pc1 = pc0.reshape(-1, 8), pc1.reshape(-1, 8)
+                pc0, pc1 = [],[]
+
                 kpts0, kpts1 = pred['keypoints0'][b].cpu().numpy(), pred['keypoints1'][b].cpu().numpy()
                 idx = pred['idx0'][b]
                 matches, matches1, conf = pred['matches0'][b].cpu().detach().numpy(), pred['matches1'][b].cpu().detach().numpy(), pred['matching_scores0'][b].cpu().detach().numpy()

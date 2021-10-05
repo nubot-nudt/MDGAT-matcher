@@ -118,10 +118,9 @@ parser.add_argument(
     '--triplet_loss_gamma', type=float, default=0.5,
     help='Threshold for triplet loss and gap loss')
 
-if parser.parse_args().descriptor == 'pointnet' or parser.parse_args().descriptor == 'pointnetmsg':
-    parser.add_argument(
-        '--train_step', type=int, default=3,  
-        help='Training step using pointnet: 1,2,3')
+parser.add_argument(
+    '--train_step', type=int, default=3,  
+    help='Training step when using pointnet: 1,2,3')
         
 if __name__ == '__main__':
     opt = parser.parse_args()
