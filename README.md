@@ -40,7 +40,7 @@ Our method runs on top of detected keypoints and  initial descriptors. In our ex
 
 One can also download the our generated [features](https://www.ipb.uni-bonn.de/html/projects/MDGAT-matcher/MDGAT-matcher.zip) used in our experiments.
 
-For mainland China friends, please use this [link](https://pan.baidu.com/s/1XJ-1YBN6kAiAud9xQg2B4w ), extract code: 08xs.
+For mainland China friends, you may use a faster [link](https://pan.baidu.com/s/1XJ-1YBN6kAiAud9xQg2B4w ), extract code: 08xs.
 
 Put the files in the ./KITTI directory, then you are ready to use our model.
 
