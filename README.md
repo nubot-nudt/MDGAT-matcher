@@ -36,9 +36,11 @@ This repo is implemented under Pytorch. For the Pytorch version
 
 ## Training and Test
 
-Our method runs on top of detected keypoints and  initial descriptors. In our experiment, we use USIP keypoionts and FPFH descriptor. Before training and test, one need to pre-extract the features on point cloud and generate the ground truth. One can follow [USIP](https://github.com/lijx10/USIP) to generate your own keypoints and descriptors. Or one can also download the [features]()(upload soon) used in our experiments.
+Our method runs on top of detected keypoints and  initial descriptors. In our experiment, we use USIP keypoionts and FPFH descriptor. Before training and test, one need to pre-extract the features on point cloud and generate the ground truth. One can follow [USIP](https://github.com/lijx10/USIP) to generate your own keypoints and descriptors. 
 
-For mainland China friends, please use this [link](https://pan.baidu.com/s/1XJ-1YBN6kAiAud9xQg2B4w ), extract code: 08xs.
+One can also download the our generated [features](https://www.ipb.uni-bonn.de/html/projects/MDGAT-matcher/MDGAT-matcher.zip) used in our experiments.
+
+For mainland China friends, you may use a faster [link](https://pan.baidu.com/s/1XJ-1YBN6kAiAud9xQg2B4w ), extract code: 08xs.
 
 Put the files in the ./KITTI directory, then you are ready to use our model.
 
