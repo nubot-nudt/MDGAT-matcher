@@ -34,7 +34,15 @@ This repo is implemented under Pytorch. For the Pytorch version
   sudo -H pip3 install -r requirements.txt
   ```
 
-## Training
+## Training and Test
+
+Our method runs on top of detected keypoints and  initial descriptors. In our experiment, we use USIP keypoionts and FPFH descriptor. Before training and test, one need to pre-extract the features on point cloud and generate the ground truth. One can follow [USIP](https://github.com/lijx10/USIP) to generate your own keypoints and descriptors. Or one can also download the [features]()(upload soon) used in our experiments.
+
+For mainland China friends, please use this [link](https://pan.baidu.com/s/1XJ-1YBN6kAiAud9xQg2B4w ), extract code: 08xs.
+
+Put the files in the ./KITTI directory, then you are ready to use our model.
+
+### Train
 
 To train the network with default parameters, run the following command:
 
@@ -42,17 +50,9 @@ To train the network with default parameters, run the following command:
 python3 train.py
 ```
 
-## Test
+### Test
 
-Our method runs on top of detected keypoints and  initial descriptors. In our experiment, we use USIP keypoionts and FPFH descriptor. One can follow [USIP](https://github.com/lijx10/USIP)  to generate your own keypoints and descriptors.
-
-**Quick test**
-
-For quick test, we provide a pre-trained model and the features used in our experiments, please download in this [link]()(upload soon).
-
-For mainland China friends, please use this [link](https://pan.baidu.com/s/1XJ-1YBN6kAiAud9xQg2B4w ), extract code: 08xs.
-
-Put the files in the ./KITTI directory and run the following command:
+For quick test, we provide a pre-trained model in ./pre-trained. Run the following command:
 
 ```sh
 python3 test.py
