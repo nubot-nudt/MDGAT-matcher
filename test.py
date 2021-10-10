@@ -102,7 +102,7 @@ parser.add_argument(
 
 parser.add_argument(
     '--resume_model', type=str, default=
-    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/superglue9-superglue-FPFH/superglue-batch128-distance-superglue-FPFH-USIP/best_model_epoch_282(val_loss0.44637227012698).pth',
+    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat29-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat2-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_100(val_loss0.45884549420105347).pth',
     # '--resume_model', type=str, default='/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss0.4375295043236407).pth',
     # '--resume_model', type=str, default='/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss2.1335412529051787).pth',
     help='Number of skip frames for training')
@@ -110,8 +110,8 @@ parser.add_argument(
     # /home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss0.4375295043236407).pth
 
 parser.add_argument(
-    '--loss_method', type=str, default='superglue', 
-    help='mine triplet_loss superglue gap_loss gap_loss_plusplus')
+    '--loss_method', type=str, default='distribution_loss', 
+    help='mine triplet_loss superglue gap_loss gap_loss_plusplus distribution_loss5')
 
 parser.add_argument(
     '--net', type=str, default='rotatary_mdgat2', 
@@ -188,7 +188,8 @@ if __name__ == '__main__':
             'triplet_loss_gamma': opt.triplet_loss_gamma,
             'train_step':opt.train_step,
             'L':opt.l,
-            'local_rank':opt.local_rank
+            'local_rank':opt.local_rank,
+            'lamda':0
         }
     }
     # print(opt.net)

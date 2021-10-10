@@ -50,7 +50,7 @@ from models.pointnet.pointnet_util import PointNetSetKptsMsg, PointNetSetAbstrac
 import numpy as np
 from util.utils_loss import (superglue, triplet, gap, gap_plus, 
                                 gap_plusplus, distribution, 
-                                distribution2, distribution4)
+                                distribution2, distribution6)
 
                             
 from scipy.spatial.distance import cdist
@@ -179,9 +179,9 @@ def Rot3DRelPositionEncoder(desc0, pos, lrf):
     '''encode three dimensional position to rotation'''
     batch_dim, feature_dim, num_heads, num_points = desc0.size()
     _, _, m, _ = pos.size()
-    pos = pos.half()
-    lrf = lrf.half()
-    desc0 = desc0.half()
+    pos = pos.float()
+    lrf = lrf.float()
+    desc0 = desc0.float()
 
     # position = pos[:, :3, :]
     desc = desc0.view(batch_dim,np.int(feature_dim/2),2,num_heads,num_points)
@@ -210,44 +210,6 @@ def Rot3DRelPositionEncoder(desc0, pos, lrf):
 
     return value
 
-# def Rot3DrelPositionEncoder(desc0, x_pos, src_pos, lrf, resolving_distance):
-#     batch_dim, feature_dim, num_heads, num_points = desc0.size()
-#     _, _, pos_dim = x_pos.size()
-#     device=torch.device('cuda')
-
-#     # position = pos[:, :3, :]
-
-#     desc = desc0.view(batch_dim,np.int(feature_dim/2),2,num_heads,num_points)
-#     desc = torch.cat((-desc[:,:,1,:,:], desc[:,:,0,:,:]), 2)
-#     desc = desc.view(batch_dim,feature_dim,num_heads,num_points)
-
-#     # transform to Local Reference Frame
-#     x_pos = torch.einsum('bdxy,bdy->bdx', lrf.transpose(2,3), x_pos)
-#     x_pos = F.interpolate(x_pos, scale_factor=2, mode='nearest').unsqueeze(2)
-#     x_pos = x_pos.repeat(1, 1, num_heads, np.int(feature_dim/(2*pos_dim)))
-#     x_pos = torch.transpose(x_pos, 1, 3)
-
-#     # transform to Local Reference Frame
-#     src_pos = torch.einsum('bdxy,bdy->bdx', lrf.transpose(2,3), src_pos)
-#     src_pos = F.interpolate(src_pos, scale_factor=2, mode='nearest').unsqueeze(2)
-#     src_pos = src_pos.repeat(1, 1, num_heads, np.int(feature_dim/(2*pos_dim)))
-#     src_pos = torch.transpose(src_pos, 1, 3)
-
-#     theta = torch.arange(0, feature_dim/(2*pos_dim), device=device).view(1, 1, -1)
-#     theta = F.interpolate(theta, scale_factor=2*pos_dim, mode='nearest').view(1, -1, 1, 1)
-#     theta = theta.repeat(batch_dim, 1, num_heads, num_points)
-#     theta = 10000**(-theta*2*pos_dim/feature_dim)
-
-#     x_theta = torch.mul(torch.mul(x_pos, np.pi/resolving_distance), theta)
-#     src_theta = torch.mul(torch.mul(src_pos, np.pi/resolving_distance), theta)
-
-#     cos_x = torch.cos(x_theta)
-#     cos_src = torch.cos(src_theta)
-#     sin_x = torch.sin(x_theta)
-#     sin_src = torch.sin(src_theta)
-
-#     return torch.mul(desc0,torch.mul(sin_x,sin_src)+torch.mul(cos_x,cos_src))+torch.mul(desc,torch.mul(sin_x,cos_src)-torch.mul(sin_src,cos_x))
-
 def attention(query, key, value):
     dim = query.shape[1]
     scores = torch.einsum('bdhn,bdhm->bhnm', query, key) / dim**.5
@@ -255,22 +217,22 @@ def attention(query, key, value):
     return torch.einsum('bhnm,bdhm->bdhn', prob, value), prob
 
 # 通过注意力权重选择邻居
-def dynamic_attention(query, key, value, k, rho):
+def dynamic_attention(query, key, value, k):
     batch, dim, head, n = query.shape
     scores = torch.einsum('bdhn,bdhm->bhnm', query, key) / dim**.5
     if k == None:
-        scores = torch.mul(scores, 1/(rho+1))
+        # scores = torch.mul(scores, 1/(rho+1))
         scores = torch.nn.functional.softmax(scores, dim=-1)
     else:
         values = scores.topk(k, dim=3, largest=True, sorted=True).values[:,:,:,k-1] # the top k-th values
         values = values.unsqueeze(3).repeat(1,1,1,256)
         idx = scores<values
-        scores = torch.mul(scores, 1/(rho+1))
+        # scores = torch.mul(scores, 1/(rho+1))
         prob = torch.nn.functional.softmax(scores[idx==False].view(batch, head, n, k), dim=-1) # perform softmax on the top k nodes
         scores[idx]=0
         scores[idx==False] = prob.view(-1)
         
-    scores = scores.half()
+    scores = scores.float()
     return torch.einsum('bhnm,bdhmn->bdhn', scores, value), scores
 
 
@@ -302,77 +264,16 @@ class MultiHeadedAttention(nn.Module):
             relative_pos = x_pos.unsqueeze(2).repeat(1,1,m,1) - src_pos.unsqueeze(1).repeat(1,n,1,1)
             # relative_pos = relative_pos[(relative_pos==0)==False].view(batch_dim, n,m-1,3)
 
-            rho = torch.sqrt(relative_pos[:,:,:,0]**2 + relative_pos[:,:,:,1]**2 + relative_pos[:,:,:,2]**2)
-            rho = rho.unsqueeze(1).repeat(1, self.num_heads, 1, 1)
+            # rho = torch.sqrt(relative_pos[:,:,:,0]**2 + relative_pos[:,:,:,1]**2 + relative_pos[:,:,:,2]**2)
+            # rho = rho.unsqueeze(1).repeat(1, self.num_heads, 1, 1)
             value = Rot3DRelPositionEncoder(value, relative_pos, lrf)
-            x, prob = dynamic_attention(query, key, value, k, rho)
+            x, prob = dynamic_attention(query, key, value, k)
             x = x.double()
         else:
             x, prob = attention(query, key, value)
 
         self.prob.append(prob)
         return self.merge(x.contiguous().view(batch_dim, self.dim*self.num_heads, -1))
-
-'''
-Version2:
-@todo issue: src_pos-x_pos=0
-add position information to 'value'
-'''
-# class MultiHeadedAttention(nn.Module):
-#     """ Multi-head attention to increase model expressivitiy """
-#     def __init__(self, num_heads: int, d_model: int, resolving_distance: float):
-#         super().__init__()
-#         assert d_model % num_heads == 0
-#         self.dim = d_model // num_heads
-#         self.num_heads = num_heads
-#         self.merge = nn.Conv1d(d_model, d_model, kernel_size=1)
-#         self.proj = nn.ModuleList([deepcopy(self.merge) for _ in range(3)])
-#         self.resolving_distance = resolving_distance
-
-#         self.encoder = MLP([3] + [32, 64, 128] + [d_model])
-#         nn.init.constant_(self.encoder[-1].bias, 0.0)
-
-#     def forward(self, x, source, x_pos, src_pos, lrf, name, k):
-#         batch_dim, feature_dim, num_points = x.size()
-
-#         if name=='self':
-#             '''
-#             Version3:
-#             add position information to 'value' using mlp
-#             '''
-#             # pos = torch.einsum('bdxy,bdy->bdx', lrf.transpose(2,3), x_pos-src_pos)
-#             # source = source + self.encoder(pos.transpose(1, 2))
-#             # query, key, value = [l(x).view(batch_dim, self.dim, self.num_heads, -1)
-#             #                     for l, x in zip(self.proj, (x, source, source))]
-
-#             '''
-#             Version2:
-#             add position information to 'value' using rotatory encoder
-#             '''
-#             source_rp = Rot3DPositionEncoder2(source, x_pos-src_pos, lrf, self.resolving_distance)
-#             query, key, value = [l(x).view(batch_dim, self.dim, self.num_heads, -1)
-#                                 for l, x in zip(self.proj, (x, source, source_rp))]
-
-#             '''position information augmented q,k,v'''
-#             query = Rot3DPositionEncoder(query, x_pos, lrf, self.resolving_distance)
-#             key = Rot3DPositionEncoder(key, src_pos, lrf, self.resolving_distance)
-#             # value = Rot3DPositionEncoder(value, x_pos-src_pos, lrf, self.resolving_distance)
-
-#             # value = Rot3DrelPositionEncoder(value, x_pos, src_pos, lrf, self.resolving_distance)
-#         elif name=='cross':
-#             query, key, value = [l(x).view(batch_dim, self.dim, self.num_heads, -1)
-#                                 for l, x in zip(self.proj, (x, source, source))]
-
-    
-#         if k==None:
-#             x, prob = attention(query, key, value)
-#         else:
-#             """ 通过注意力权重选择邻居 """
-#             x, prob = dynamic_attention3(query, key, value, k)
-
-            
-#         self.prob.append(prob)
-#         return self.merge(x.contiguous().view(batch_dim, self.dim*self.num_heads, -1))
 
 class AttentionalPropagation(nn.Module):
     def __init__(self, feature_dim: int, num_heads: int):
@@ -603,8 +504,8 @@ class r_MDGAT2(nn.Module):
             loss_mean = gap_plusplus(gt_matches0, gt_matches1, scores, self.triplet_loss_gamma, self.config['var_weight'])
         elif self.loss_method == 'distribution_loss':
             loss = distribution(self.triplet_loss_gamma)
-        elif self.loss_method == 'distribution_loss4':
-            loss = distribution4(self.triplet_loss_gamma)
+        elif self.loss_method == 'distribution_loss6':
+            loss = distribution6(self.triplet_loss_gamma, self.lamda)
         
         if torch.cuda.is_available():
             device=torch.device('cuda:{}'.format(self.local_rank[0]))
@@ -626,3 +527,10 @@ class r_MDGAT2(nn.Module):
             'loss': loss_mean,
             # 'skip_train': False
         }
+
+    def update_lamda(self, epoch, indicator):
+        lamda_clip = 1
+        self.lamda = 0.02*(epoch-indicator) + self.lamda_initial
+
+        if self.lamda > lamda_clip:
+            self.lamda = lamda_clip

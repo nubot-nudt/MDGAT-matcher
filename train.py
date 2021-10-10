@@ -23,6 +23,7 @@ from tensorboardX import SummaryWriter
 from models.superglue import SuperGlue
 from models.r_mdgat import r_MDGAT
 from models.r_mdgat2 import r_MDGAT2
+from models.r_mdgat3 import r_MDGAT3
 from models.mdgat import MDGAT
 
 torch.set_grad_enabled(True)
@@ -63,7 +64,7 @@ parser.add_argument(
     help='If memory is enough, load all the data')
         
 parser.add_argument(
-    '--batch_size', type=int, default=64, #12
+    '--batch_size', type=int, default=32, #12
     help='Batch size')
 
 parser.add_argument(
@@ -71,13 +72,13 @@ parser.add_argument(
     help='Used gpu label')
 
 parser.add_argument(
-    '--resume', type=bool, default=False, # True False
+    '--resume', type=bool, default=True, # True False
     help='Resuming from existing model')
 
 parser.add_argument(
     # '--resume_model', type=str, default='/media/chenghao/本地磁盘/sch_ws/gnn/checkpoint/raw9-kNone-superglue-FPFH_only/nomutualcheck-raw-kNone-batch64-distance-superglue-FPFH_only-USIP/best_model_epoch_216(test_loss1.4080408022386168).pth')
     '--resume_model', type=str, default=
-    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/mdgat9-k[128, None, 128, None, 64, None, 64, None]-distribution_loss-FPFH/nomutualcheck-mdgat-k[128, None, 128, None, 64, None, 64, None]-batch128-distance-distribution_loss-FPFH-USIP/model_epoch_380.pth',
+    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat29-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat2-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_94(val_loss0.48642896035507366).pth',
     help='Path to model to be Resumed')
 
 
@@ -199,7 +200,7 @@ if __name__ == '__main__':
         start_epoch = checkpoint['epoch'] + 1   # 设置开始的epoch  # start_epoch = 1 # start_epoch = checkpoint['epoch'] + 1 
         best_epoch = start_epoch
         loss = checkpoint['loss']
-        best_loss = 0.47428859288757375
+        best_loss = 0.4864
     else:
         start_epoch = 1
         best_loss = 1e6
@@ -217,7 +218,8 @@ if __name__ == '__main__':
                 'mutual_check': opt.mutual_check,
                 'triplet_loss_gamma': opt.triplet_loss_gamma,
                 'L':opt.l,
-                'local_rank':opt.local_rank
+                'local_rank':opt.local_rank,
+                'lamda':0
             }
         }
     
@@ -229,6 +231,8 @@ if __name__ == '__main__':
         net = r_MDGAT2(config.get('net', {}))
     elif opt.net == 'mdgat':
         net = MDGAT(config.get('net', {}))
+    elif opt.net == 'rotatary_mdgat3':
+        net = r_MDGAT3(config.get('net', {}))
     
     # 参数传入device
     if torch.cuda.is_available():
@@ -289,7 +293,10 @@ if __name__ == '__main__':
                         pred[k] = Variable(torch.stack(pred[k]).to(device))
                     # print(type(pred[k]))   #pytorch.tensor
             
+            # x= time.time()
             data = net(pred) # 匹配结果
+            # y= time.time()
+            # print(x-y)
 
             # 去除头字符，将匹配结果和源数据拼接
             for k, v in pred.items(): # pred.items() 返回可遍历的元组数组
@@ -381,8 +388,7 @@ if __name__ == '__main__':
             # print("log file saved to {}\n"
             #     .format(log_path))
 
-
-        # if epoch%10 == 0 and epoch > 0:
-        #     net.update_learning_rate(0.5, optimizer)
-
-    
+        if opt.loss_method == 'distribution_loss6':
+            indicator = 95
+            if epoch > indicator:
+                net.module.update_lamda(epoch, indicator)
