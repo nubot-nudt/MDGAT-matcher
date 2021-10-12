@@ -64,7 +64,7 @@ parser.add_argument(
     help='If memory is enough, load all the data')
         
 parser.add_argument(
-    '--batch_size', type=int, default=32, #12
+    '--batch_size', type=int, default=128, #12
     help='Batch size')
 
 parser.add_argument(
@@ -72,22 +72,22 @@ parser.add_argument(
     help='Used gpu label')
 
 parser.add_argument(
-    '--resume', type=bool, default=True, # True False
+    '--resume', type=bool, default=False, # True False
     help='Resuming from existing model')
 
 parser.add_argument(
     # '--resume_model', type=str, default='/media/chenghao/本地磁盘/sch_ws/gnn/checkpoint/raw9-kNone-superglue-FPFH_only/nomutualcheck-raw-kNone-batch64-distance-superglue-FPFH_only-USIP/best_model_epoch_216(test_loss1.4080408022386168).pth')
     '--resume_model', type=str, default=
-    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat29-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat2-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_94(val_loss0.48642896035507366).pth',
+    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat2-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat2-batch32-distance-distribution_loss-FPFH-USIP/model_epoch_239.pth',
     help='Path to model to be Resumed')
 
 
 parser.add_argument(
-    '--net', type=str, default='rotatary_mdgat2', 
+    '--net', type=str, default='mdgat', 
     help='Choose net structure : mdgat superglue rotatary_mdgat rotatary_mdgat2')
 
 parser.add_argument(
-    '--loss_method', type=str, default='distribution_loss',
+    '--loss_method', type=str, default='distribution_loss7',
     help='Choose loss function : superglue triplet_loss gap_loss gap_loss_plus distribution_loss')
 
 parser.add_argument(
@@ -176,9 +176,9 @@ if __name__ == '__main__':
 
     # 创建模型输出路径
     if opt.rotationa_ugment ==True:
-        model_out_path = '{}/{}/RotationAug/{}{}-{}-{}'.format(opt.model_out_path, opt.dataset, opt.net, opt.l, opt.loss_method, opt.descriptor)
+        model_out_path = '{}/{}/RotationAug/{}-{}-{}'.format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor)
     else:
-        model_out_path = '{}/{}/{}{}-{}-{}' .format(opt.model_out_path, opt.dataset, opt.net, opt.l, opt.loss_method, opt.descriptor)
+        model_out_path = '{}/{}/{}-{}-{}' .format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor)
 
     log_path = '{}/{}/logs'.format(model_out_path,model_name)
     log_path = Path(log_path)
@@ -200,7 +200,7 @@ if __name__ == '__main__':
         start_epoch = checkpoint['epoch'] + 1   # 设置开始的epoch  # start_epoch = 1 # start_epoch = checkpoint['epoch'] + 1 
         best_epoch = start_epoch
         loss = checkpoint['loss']
-        best_loss = 0.4864
+        best_loss = 0.427
     else:
         start_epoch = 1
         best_loss = 1e6

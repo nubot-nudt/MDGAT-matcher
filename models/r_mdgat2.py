@@ -50,7 +50,7 @@ from models.pointnet.pointnet_util import PointNetSetKptsMsg, PointNetSetAbstrac
 import numpy as np
 from util.utils_loss import (superglue, triplet, gap, gap_plus, 
                                 gap_plusplus, distribution, 
-                                distribution2, distribution6)
+                                distribution2, distribution6, distribution7)
 
                             
 from scipy.spatial.distance import cdist
@@ -506,6 +506,8 @@ class r_MDGAT2(nn.Module):
             loss = distribution(self.triplet_loss_gamma)
         elif self.loss_method == 'distribution_loss6':
             loss = distribution6(self.triplet_loss_gamma, self.lamda)
+        elif self.loss_method == 'distribution_loss7':
+            loss = distribution7(self.triplet_loss_gamma, self.lamda)
         
         if torch.cuda.is_available():
             device=torch.device('cuda:{}'.format(self.local_rank[0]))
@@ -515,9 +517,18 @@ class r_MDGAT2(nn.Module):
                 loss = torch.nn.DataParallel(loss)
         else:
             device = torch.device("cpu")
-
         loss.to(device)
-        loss_mean = loss(gt_matches0, gt_matches1, scores)
+
+        if self.loss_method == 'distribution_loss':
+            loss_mean = loss(gt_matches0, gt_matches1, scores)
+        else:
+            b,d,n = mdesc0.size()
+            _,_,m = mdesc1.size()
+            distance = mdesc0[:,:,:,None].expand(b,d,n,m) - mdesc1[:,:,None].expand(b,d,n,m)
+            distance = torch.sqrt(torch.sum(distance**2, 1)/d)
+            loss_mean = loss(gt_matches0, gt_matches1, scores, distance)
+
+        # loss_mean = loss(gt_matches0, gt_matches1, scores)
             
         return {
             'matches0': indices0, # use -1 for invalid match

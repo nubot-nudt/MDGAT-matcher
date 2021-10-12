@@ -102,7 +102,7 @@ parser.add_argument(
 
 parser.add_argument(
     '--resume_model', type=str, default=
-    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat29-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat2-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_100(val_loss0.45884549420105347).pth',
+    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_298(val_loss0.44557684484279125).pth',
     # '--resume_model', type=str, default='/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss0.4375295043236407).pth',
     # '--resume_model', type=str, default='/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss2.1335412529051787).pth',
     help='Number of skip frames for training')
@@ -110,12 +110,12 @@ parser.add_argument(
     # /home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss0.4375295043236407).pth
 
 parser.add_argument(
-    '--loss_method', type=str, default='distribution_loss', 
+    '--loss_method', type=str, default='distribution_loss7', 
     help='mine triplet_loss superglue gap_loss gap_loss_plusplus distribution_loss5')
 
 parser.add_argument(
-    '--net', type=str, default='rotatary_mdgat2', 
-    help='mdgat; superglue; rotatary_mdgat')
+    '--net', type=str, default='mdgat', 
+    help='mdgat; superglue; rotatary_mdgat rotatary_mdgat2')
 
 parser.add_argument(
     '--mutual_check', type=bool, default=False,
@@ -158,7 +158,7 @@ parser.add_argument(
     help='')
 
 parser.add_argument(
-    '--match_threshold', type=float, default=0.2,     #0.2
+    '--match_threshold', type=float, default=0.003,     #0.2
     help='SuperGlue match threshold')
 
 parser.add_argument(
@@ -438,10 +438,10 @@ if __name__ == '__main__':
         fp_rate_mean = np.mean(fp_rate_array)
         tp_rate_mean = np.mean(tp_rate_array)
         tp_rate_mean2 = np.mean(tp_rate2_array)
-        print('repeatibility, inlier, inlier_ratio, fail, precision, accuracy, recall, fp_rate, tp_rate, tp_rate2, trans_error, rot_error, relative_trans_error, relative_rot_error')
+        print('repeatibility, inlier, inlier_ratio, fail, precision, accuracy, recall, F1, fp_rate, tp_rate, tp_rate2, trans_error, rot_error, relative_trans_error, relative_rot_error')
         
-        print('{:.3f}   {:.3f}  {:.3f}  {:.6f}  {:.3f}  {:.3f}  {:.3f}  {:.3f}  {:.3f}  {:.3f}  {:.3f}% {:.3f}% {:.3f}% {:.3f}%'
-        .format(repeatibilty_array_mean, inlier_mean, inlier_ratio_mean, fail/(i+1), precision_mean, accuracy_mean, recall_mean, fp_rate_mean, tp_rate_mean, tp_rate_mean2, trans_error_mean, rot_error_mean, relative_trans_error_mean, relative_rot_error_mean ))
+        print('{:.3f}   {:.3f}  {:.3f}  {:.6f} || {:.3f}  {:.3f}  {:.3f}  {:.3f} || {:.3f}  {:.3f}  {:.3f} || {:.3f}% {:.3f}% {:.3f}% {:.3f}%'
+        .format(repeatibilty_array_mean, inlier_mean, inlier_ratio_mean, fail/(i+1), precision_mean, accuracy_mean, recall_mean, 2*precision_mean*recall_mean/(precision_mean+recall_mean), fp_rate_mean, tp_rate_mean, tp_rate_mean2, trans_error_mean, rot_error_mean, relative_trans_error_mean, relative_rot_error_mean ))
         
         print('valid num , all_num ')
         print('{}   {}'.format(valid_num_mean, all_num_mean))

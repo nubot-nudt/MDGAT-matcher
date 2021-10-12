@@ -47,7 +47,7 @@ import time
 from models.pointnet.pointnet_util import PointNetSetKptsMsg, PointNetSetAbstraction
 from util.utils_loss import (superglue, triplet, gap, gap_plus, 
                                 gap_plusplus, distribution, 
-                                distribution2, distribution4)
+                                distribution2, distribution4, distribution7)
 
 def knn(x, src, k):
     inner = -2*torch.matmul(x.transpose(2, 1), src)
@@ -503,7 +503,7 @@ class MDGAT(nn.Module):
         self.k = config['k']
         self.mutual_check = config['mutual_check']
         self.triplet_loss_gamma = config['triplet_loss_gamma']
-        self.train_step = config['train_step']
+        # self.train_step = config['train_step']
         self.local_rank = config['local_rank']
 
         # assert self.config['weights'] in ['indoor', 'outdoor']
@@ -542,33 +542,33 @@ class MDGAT(nn.Module):
             desc0, desc1 = self.gnn(desc0, desc1, self.k, self.config['L'])
             # Final MLP projection.
             mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
-        elif self.descriptor == 'pointnet' or self.descriptor == 'pointnetmsg':
-            # begin = time.time()
-            pc0, pc1 = data['cloud0'].double(), data['cloud1'].double()
-            desc0 = self.penc(pc0, kpts0, data['scores0'])
-            desc1 = self.penc(pc1, kpts1, data['scores1'])
-            # print('encoder',time.time() - begin)
-            """
-            3-step训练
-            """
-            # 只更新pointnet
-            if self.train_step == 1:
-                mdesc0, mdesc1 = desc0, desc1
-            # 不更新pointnet
-            elif self.train_step == 2:                 
-                desc0, desc1 = desc0.detach(), desc1.detach()
-                # Multi-layer Transformer network.
-                desc0, desc1 = self.gnn(desc0, desc1, self.k, self.config['L'])
-                # Final MLP projection.
-                mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
-            # 更新pointnet和gnn
-            elif self.train_step == 3: 
-                # Multi-layer Transformer network.
-                desc0, desc1 = self.gnn(desc0, desc1, self.k, self.config['L'])
-                # Final MLP projection.
-                mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
-            else:
-                raise Exception('Invalid train_step.')
+        # elif self.descriptor == 'pointnet' or self.descriptor == 'pointnetmsg':
+        #     # begin = time.time()
+        #     pc0, pc1 = data['cloud0'].double(), data['cloud1'].double()
+        #     desc0 = self.penc(pc0, kpts0, data['scores0'])
+        #     desc1 = self.penc(pc1, kpts1, data['scores1'])
+        #     # print('encoder',time.time() - begin)
+        #     """
+        #     3-step训练
+        #     """
+        #     # 只更新pointnet
+        #     if self.train_step == 1:
+        #         mdesc0, mdesc1 = desc0, desc1
+        #     # 不更新pointnet
+        #     elif self.train_step == 2:                 
+        #         desc0, desc1 = desc0.detach(), desc1.detach()
+        #         # Multi-layer Transformer network.
+        #         desc0, desc1 = self.gnn(desc0, desc1, self.k, self.config['L'])
+        #         # Final MLP projection.
+        #         mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
+        #     # 更新pointnet和gnn
+        #     elif self.train_step == 3: 
+        #         # Multi-layer Transformer network.
+        #         desc0, desc1 = self.gnn(desc0, desc1, self.k, self.config['L'])
+        #         # Final MLP projection.
+        #         mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
+        #     else:
+        #         raise Exception('Invalid train_step.')
         elif self.descriptor == 'FPFH_only':
             desc0, desc1 = data['descriptors0'].double(), data['descriptors1'].double()
 
@@ -651,6 +651,8 @@ class MDGAT(nn.Module):
             loss = distribution(self.triplet_loss_gamma)
         elif self.loss_method == 'distribution_loss4':
             loss = distribution4(self.triplet_loss_gamma)
+        elif self.loss_method == 'distribution_loss7':
+            loss = distribution7(self.triplet_loss_gamma)
         
         if torch.cuda.is_available():
             device=torch.device('cuda:{}'.format(self.local_rank[0]))

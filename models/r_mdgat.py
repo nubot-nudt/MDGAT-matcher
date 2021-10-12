@@ -50,7 +50,7 @@ from models.pointnet.pointnet_util import PointNetSetKptsMsg, PointNetSetAbstrac
 import numpy as np
 from util.utils_loss import (superglue, triplet, gap, gap_plus, 
                                 gap_plusplus, distribution, 
-                                distribution2, distribution4, distribution6)
+                                distribution2, distribution4, distribution6, distribution7)
 
 def knn(x, src, k):
     '''
@@ -554,6 +554,8 @@ class r_MDGAT(nn.Module):
             loss = distribution4(self.triplet_loss_gamma)
         elif self.loss_method == 'distribution_loss6':
             loss = distribution6(self.triplet_loss_gamma, self.lamda)
+        elif self.loss_method == 'distribution_loss7':
+            loss = distribution7(self.triplet_loss_gamma, self.lamda)
         
         if torch.cuda.is_available():
             device=torch.device('cuda:{}'.format(self.local_rank[0]))
@@ -565,7 +567,7 @@ class r_MDGAT(nn.Module):
             device = torch.device("cpu")
         loss.to(device)
         
-        if self.loss_method == 'distribution_loss6':
+        if self.loss_method == 'distribution_loss6' or self.loss_method == 'distribution_loss7':
             b,d,n = mdesc0.size()
             _,_,m = mdesc1.size()
             distance = mdesc0[:,:,:,None].expand(b,d,n,m) - mdesc1[:,:,None].expand(b,d,n,m)
