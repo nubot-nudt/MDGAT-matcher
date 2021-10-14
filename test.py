@@ -102,7 +102,7 @@ parser.add_argument(
 
 parser.add_argument(
     '--resume_model', type=str, default=
-    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_298(val_loss0.44557684484279125).pth',
+    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat-distribution_loss7-FPFH/nomutualcheck-rotatary_mdgat-batch128-distance-distribution_loss7-FPFH-USIP/best_model_epoch_186(val_loss0.40416892331245624).pth',
     # '--resume_model', type=str, default='/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss0.4375295043236407).pth',
     # '--resume_model', type=str, default='/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss2.1335412529051787).pth',
     help='Number of skip frames for training')
@@ -114,7 +114,7 @@ parser.add_argument(
     help='mine triplet_loss superglue gap_loss gap_loss_plusplus distribution_loss5')
 
 parser.add_argument(
-    '--net', type=str, default='mdgat', 
+    '--net', type=str, default='rotatary_mdgat', 
     help='mdgat; superglue; rotatary_mdgat rotatary_mdgat2')
 
 parser.add_argument(
@@ -123,7 +123,7 @@ parser.add_argument(
 
 parser.add_argument(
     # '--k', type=int, default=[], 
-    '--k', type=int, default=[128, None, 128, None, 64, None, 64, None], 
+    '--k', type=int, default=[128, None, 128, None, 64, None, 64, None],
     # '--k', type=int, default=[128, None,128, None,128, None,128, None,128, None,128, None, 128, None, 64, None, 64, None],
     # '--k', type=int, default=20, 
     help='k nearest neighbour')
@@ -164,6 +164,10 @@ parser.add_argument(
 parser.add_argument(
     '--train_step', type=int, default=2,  
     help='pointnet描述子采用双阶段训练')
+
+parser.add_argument(
+    '--rotation_augment', type=bool, default=True,
+    help='perform random rotation on input')
 
 if __name__ == '__main__':
     opt = parser.parse_args()

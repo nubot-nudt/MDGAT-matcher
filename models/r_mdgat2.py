@@ -401,6 +401,8 @@ class r_MDGAT2(nn.Module):
         self.mutual_check = config['mutual_check']
         self.triplet_loss_gamma = config['triplet_loss_gamma']
         self.local_rank = config['local_rank']
+        self.lamda_initial = config['lamda']
+        self.lamda = self.lamda_initial
 
     def forward(self, data):
         """Run SuperGlue on a pair of keypoints and descriptors"""
@@ -507,7 +509,7 @@ class r_MDGAT2(nn.Module):
         elif self.loss_method == 'distribution_loss6':
             loss = distribution6(self.triplet_loss_gamma, self.lamda)
         elif self.loss_method == 'distribution_loss7':
-            loss = distribution7(self.triplet_loss_gamma, self.lamda)
+            loss = distribution7(self.triplet_loss_gamma)
         
         if torch.cuda.is_available():
             device=torch.device('cuda:{}'.format(self.local_rank[0]))
@@ -519,7 +521,7 @@ class r_MDGAT2(nn.Module):
             device = torch.device("cpu")
         loss.to(device)
 
-        if self.loss_method == 'distribution_loss':
+        if self.loss_method == 'distribution_loss' or self.loss_method == 'distribution_loss7':
             loss_mean = loss(gt_matches0, gt_matches1, scores)
         else:
             b,d,n = mdesc0.size()

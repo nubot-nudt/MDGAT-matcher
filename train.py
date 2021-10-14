@@ -83,7 +83,7 @@ parser.add_argument(
 
 
 parser.add_argument(
-    '--net', type=str, default='mdgat', 
+    '--net', type=str, default='rotatary_mdgat', 
     help='Choose net structure : mdgat superglue rotatary_mdgat rotatary_mdgat2')
 
 parser.add_argument(
@@ -154,8 +154,8 @@ parser.add_argument(
     help='Output model path')
 
 parser.add_argument(
-    '--rotationa_ugment', type=bool, default=True,
-    help='Output model path')
+    '--rotation_augment', type=bool, default=True,
+    help='perform random rotation on input')
 
 
 
@@ -175,7 +175,7 @@ if __name__ == '__main__':
         model_name = 'nomutualcheck-{}-batch{}-{}-{}-{}-{}' .format(opt.net, opt.batch_size, opt.train_mode, opt.loss_method, opt.descriptor, opt.keypoints)
 
     # 创建模型输出路径
-    if opt.rotationa_ugment ==True:
+    if opt.rotation_augment ==True:
         model_out_path = '{}/{}/RotationAug/{}-{}-{}'.format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor)
     else:
         model_out_path = '{}/{}/{}-{}-{}' .format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor)

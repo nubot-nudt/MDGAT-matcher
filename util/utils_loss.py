@@ -751,11 +751,11 @@ class distribution7(nn.Module):
         '''average margin loss'''
         negative = gap + self.triplet_loss_gamma < 0
         negative2 = gap2 + self.triplet_loss_gamma < 0
-        average_margin_loss = (torch.exp(gap[negative].mean()) + torch.exp(gap2[negative2].mean()))/2
+        # average_margin_loss = (torch.exp(gap[negative].mean()) + torch.exp(gap2[negative2].mean()))/2
 
         '''variance loss'''
         var_loss = (torch.var(gap[negative]) + torch.var(gap2[negative2]))/2
 
         '''add all the loss'''
-        loss_mean = average_margin_loss + gap_loss + var_loss
+        loss_mean = gap_loss + var_loss
         return loss_mean

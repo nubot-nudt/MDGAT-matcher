@@ -555,7 +555,7 @@ class r_MDGAT(nn.Module):
         elif self.loss_method == 'distribution_loss6':
             loss = distribution6(self.triplet_loss_gamma, self.lamda)
         elif self.loss_method == 'distribution_loss7':
-            loss = distribution7(self.triplet_loss_gamma, self.lamda)
+            loss = distribution7(self.triplet_loss_gamma)
         
         if torch.cuda.is_available():
             device=torch.device('cuda:{}'.format(self.local_rank[0]))
@@ -567,7 +567,7 @@ class r_MDGAT(nn.Module):
             device = torch.device("cpu")
         loss.to(device)
         
-        if self.loss_method == 'distribution_loss6' or self.loss_method == 'distribution_loss7':
+        if self.loss_method == 'distribution_loss6':
             b,d,n = mdesc0.size()
             _,_,m = mdesc1.size()
             distance = mdesc0[:,:,:,None].expand(b,d,n,m) - mdesc1[:,:,None].expand(b,d,n,m)

@@ -155,6 +155,7 @@ class SparseDataset(Dataset):
         # self.extractor = FeatureExtractor()
         # self.N_SCANS = 64
         self.memory_is_enough = opt.memory_is_enough
+        self.RotAug = opt.rotation_augment
  
         if self.train_mode == 'kframe':
             self.seq_list, self.folder_list, self.sample_num_list, self.accumulated_sample_num_list = make_dataset_kitti_kframe(self.keypoints_path, mode)
@@ -588,20 +589,27 @@ class SparseDataset(Dataset):
         kp2_np = kp2_np[:, :3]
 
         ''' augment training data with random rotation'''
-        # if self.mode == 'train':
-        theta=np.random.rand(1)*2*np.pi#0到2*pi的均匀分布
-        R_z = np.array([[math.cos(theta),    -math.sin(theta),    0],
-                [math.sin(theta),    math.cos(theta),     0],
-                [0,                     0,                      1]
-                ])
-        Rt_z = np.array([[math.cos(theta),    -math.sin(theta),    0, 0],
-                [math.sin(theta),    math.cos(theta),     0, 0],
-                [0,                     0,                      1, 0],
-                [0,0,0,1]
-                ])
-        R_z = torch.tensor(R_z, dtype=torch.double)
-        Rt_z = torch.tensor(Rt_z, dtype=torch.double)
-        kp1_np = torch.einsum('ki,ji->jk', R_z, kp1_np)
+        if self.RotAug == True:
+            theta=np.random.rand(1)*2*np.pi#0到2*pi的均匀分布
+            R_z = np.array([[math.cos(theta),    -math.sin(theta),    0],
+                    [math.sin(theta),    math.cos(theta),     0],
+                    [0,                     0,                      1]
+                    ])
+            Rt_z = np.array([[math.cos(theta),    -math.sin(theta),    0, 0],
+                    [math.sin(theta),    math.cos(theta),     0, 0],
+                    [0,                     0,                      1, 0],
+                    [0,0,0,1]
+                    ])
+            R_z = torch.tensor(R_z, dtype=torch.double)
+            Rt_z = torch.tensor(Rt_z, dtype=torch.double)
+            kp1_np = torch.einsum('ki,ji->jk', R_z, kp1_np)
+        else:
+            Rt_z = np.array([[1,    0,    0, 0],
+                    [0, 1,  0, 0],
+                    [0, 0,  1, 0],
+                    [0, 0,  0,  1]
+                    ])
+            Rt_z = torch.tensor(Rt_z, dtype=torch.double)
 
         # 归一化
         norm1, norm2 = np.linalg.norm(descs1, axis=1), np.linalg.norm(descs2, axis=1)
