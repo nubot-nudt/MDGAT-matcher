@@ -756,6 +756,6 @@ class distribution7(nn.Module):
         '''variance loss'''
         var_loss = (torch.var(gap[negative]) + torch.var(gap2[negative2]))/2
 
-        '''add all the loss'''
+        '' 'add all the loss'''
         loss_mean = gap_loss + var_loss
-        return loss_mean
+        return [loss_mean, gap_loss, var_loss]

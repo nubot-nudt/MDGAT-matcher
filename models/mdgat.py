@@ -433,23 +433,6 @@ def arange_like(x, dim: int):
 
 
 class MDGAT(nn.Module):
-    """SuperGlue feature matching middle-end
-
-    Given two sets of keypoints and locations, we determine the
-    correspondences by:
-      1. Keypoint Encoding (normalization + visual feature and location fusion)
-      2. Graph Neural Network with multiple self and cross-attention layers
-      3. Final projection layer
-      4. Optimal Transport Layer (a differentiable Hungarian matching algorithm)
-      5. Thresholding matrix based on mutual exclusivity and a match_threshold
-
-    The correspondence ids use -1 to indicate non-matching points.
-
-    Paul-Edouard Sarlin, Daniel DeTone, Tomasz Malisiewicz, and Andrew
-    Rabinovich. SuperGlue: Learning Feature Matching with Graph Neural
-    Networks. In CVPR, 2020. https://arxiv.org/abs/1911.11763
-
-    """
     default_config = {
         'descriptor_dim': 128,
         'weights': 'indoor',

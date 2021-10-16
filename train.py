@@ -24,6 +24,7 @@ from models.superglue import SuperGlue
 from models.r_mdgat import r_MDGAT
 from models.r_mdgat2 import r_MDGAT2
 from models.r_mdgat3 import r_MDGAT3
+from models.r_mdgat4 import r_MDGAT4
 from models.mdgat import MDGAT
 
 torch.set_grad_enabled(True)
@@ -64,7 +65,7 @@ parser.add_argument(
     help='If memory is enough, load all the data')
         
 parser.add_argument(
-    '--batch_size', type=int, default=128, #12
+    '--batch_size', type=int, default=32, #12
     help='Batch size')
 
 parser.add_argument(
@@ -83,11 +84,11 @@ parser.add_argument(
 
 
 parser.add_argument(
-    '--net', type=str, default='rotatary_mdgat', 
+    '--net', type=str, default='rotatary_mdgat4', 
     help='Choose net structure : mdgat superglue rotatary_mdgat rotatary_mdgat2')
 
 parser.add_argument(
-    '--loss_method', type=str, default='distribution_loss7',
+    '--loss_method', type=str, default='distribution_loss',
     help='Choose loss function : superglue triplet_loss gap_loss gap_loss_plus distribution_loss')
 
 parser.add_argument(
@@ -233,6 +234,8 @@ if __name__ == '__main__':
         net = MDGAT(config.get('net', {}))
     elif opt.net == 'rotatary_mdgat3':
         net = r_MDGAT3(config.get('net', {}))
+    elif opt.net == 'rotatary_mdgat4':
+        net = r_MDGAT4(config.get('net', {}))
     
     # 参数传入device
     if torch.cuda.is_available():

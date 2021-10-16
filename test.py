@@ -28,6 +28,7 @@ from models.superglue import SuperGlue
 from models.r_mdgat import r_MDGAT
 from models.r_mdgat2 import r_MDGAT2
 from models.mdgat import MDGAT
+from models.r_mdgat4 import r_MDGAT4
 
 from scipy.spatial.distance import cdist
 
@@ -102,7 +103,7 @@ parser.add_argument(
 
 parser.add_argument(
     '--resume_model', type=str, default=
-    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat-distribution_loss7-FPFH/nomutualcheck-rotatary_mdgat-batch128-distance-distribution_loss7-FPFH-USIP/best_model_epoch_186(val_loss0.40416892331245624).pth',
+    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat4-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat4-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_61(val_loss0.42219318716237575).pth',
     # '--resume_model', type=str, default='/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss0.4375295043236407).pth',
     # '--resume_model', type=str, default='/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss2.1335412529051787).pth',
     help='Number of skip frames for training')
@@ -110,11 +111,11 @@ parser.add_argument(
     # /home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss0.4375295043236407).pth
 
 parser.add_argument(
-    '--loss_method', type=str, default='distribution_loss7', 
+    '--loss_method', type=str, default='distribution_loss', 
     help='mine triplet_loss superglue gap_loss gap_loss_plusplus distribution_loss5')
 
 parser.add_argument(
-    '--net', type=str, default='rotatary_mdgat', 
+    '--net', type=str, default='rotatary_mdgat4', 
     help='mdgat; superglue; rotatary_mdgat rotatary_mdgat2')
 
 parser.add_argument(
@@ -205,6 +206,9 @@ if __name__ == '__main__':
         net = r_MDGAT2(config.get('net', {}))
     elif opt.net == 'mdgat':
         net = MDGAT(config.get('net', {}))
+    elif opt.net == 'rotatary_mdgat4':
+        net = r_MDGAT4(config.get('net', {}))
+
     optimizer = torch.optim.Adam(net.parameters(), lr=config.get('net', {}).get('lr'))
     # 加载并行训练后的模型
     net = torch.nn.DataParallel(net)
@@ -250,6 +254,7 @@ if __name__ == '__main__':
         trans_error_array = []; rot_error_array = []; relative_trans_error_array = []; relative_rot_error_array = []
         repeatibilty_array = []; valid_num_array = []; all_num_array = []; inlier_array = [] 
         kpnum_array = []; fp_rate_array = []; tp_rate_array = []; tp_rate2_array = []; inlier_ratio_array= []
+        loss_array = []; gap=[]; var=[]
         fail = 0
         baned_data = 0
         
@@ -366,6 +371,10 @@ if __name__ == '__main__':
                     fp_rate = np.sum(false_positive)/np.sum(matches_gt==-1)
                     tp_rate = np.sum([valid[i] and (matches_gt[i]>-1) for i in range(len(kpts0))])/np.sum(matches_gt > -1) #判断为有匹配就为positive
                     tp_rate2 = np.sum(true_positive)/np.sum(matches_gt > -1) #判断为有匹配且判断正确为positive
+
+                    # loss = pred['loss'][0].cpu().detach().numpy()[0]
+                    # loss1 = pred['loss'][1].cpu().detach().numpy()[0]
+                    # loss2 = pred['loss'][2].cpu().detach().numpy()[0]
                     
                     ## 根据匹配结果，计算pose误差, 计算inlier和failure ##
                     if opt.calculate_pose:
@@ -410,6 +419,9 @@ if __name__ == '__main__':
                         recall_array.append(recall)
                         fp_rate_array.append(fp_rate)
                         tp_rate_array.append(tp_rate)
+                        # loss_array.append(loss)
+                        # gap.append(loss1)
+                        # var.append(loss2)
                         print('idx{}, precision {:.3f}, accuracy {:.3f}, recall {:.3f}, fp_rate {:.3f}, tp_rate {:.3f}'.format(
                             idx, precision, accuracy, recall, fp_rate, tp_rate))
                     
@@ -442,6 +454,13 @@ if __name__ == '__main__':
         fp_rate_mean = np.mean(fp_rate_array)
         tp_rate_mean = np.mean(tp_rate_array)
         tp_rate_mean2 = np.mean(tp_rate2_array)
+
+        loss_mean = np.mean(loss_array)
+        gap1 = np.mean(gap)
+        var1 = np.mean(var)
+
+        print(loss_mean, gap1, var1)
+
         print('repeatibility, inlier, inlier_ratio, fail, precision, accuracy, recall, F1, fp_rate, tp_rate, tp_rate2, trans_error, rot_error, relative_trans_error, relative_rot_error')
         
         print('{:.3f}   {:.3f}  {:.3f}  {:.6f} || {:.3f}  {:.3f}  {:.3f}  {:.3f} || {:.3f}  {:.3f}  {:.3f} || {:.3f}% {:.3f}% {:.3f}% {:.3f}%'
