@@ -24,11 +24,11 @@ from util.utils_test import (calculate_error, solve_icp, point2inch,
                             align_vector_to_another, normalized, LineMesh,
                             plot_match)
 
-from models.superglue import SuperGlue
-from models.r_mdgat import r_MDGAT
-from models.r_mdgat2 import r_MDGAT2
-from models.mdgat import MDGAT
-from models.r_mdgat4 import r_MDGAT4
+from models.fa.superglue import SuperGlue
+from models.fa.r_mdgat import r_MDGAT
+from models.fa.r_mdgat2 import r_MDGAT2
+from models.fa.mdgat import MDGAT
+from models.fa.r_mdgat4 import r_MDGAT4
 
 from scipy.spatial.distance import cdist
 
@@ -103,7 +103,7 @@ parser.add_argument(
 
 parser.add_argument(
     '--resume_model', type=str, default=
-    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat4-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat4-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_61(val_loss0.42219318716237575).pth',
+    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat-distribution_loss8-FPFH/[128, None, 128, None, 64, None, 64, None]/nomutualcheck-rotatary_mdgat-batch128-distance-distribution_loss8-FPFH-USIP/best_model_epoch_152(val_loss0.5243409795628237).pth',
     # '--resume_model', type=str, default='/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss0.4375295043236407).pth',
     # '--resume_model', type=str, default='/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss2.1335412529051787).pth',
     help='Number of skip frames for training')
@@ -115,7 +115,7 @@ parser.add_argument(
     help='mine triplet_loss superglue gap_loss gap_loss_plusplus distribution_loss5')
 
 parser.add_argument(
-    '--net', type=str, default='rotatary_mdgat4', 
+    '--net', type=str, default='rotatary_mdgat', 
     help='mdgat; superglue; rotatary_mdgat rotatary_mdgat2')
 
 parser.add_argument(
@@ -123,8 +123,8 @@ parser.add_argument(
     help='')
 
 parser.add_argument(
-    # '--k', type=int, default=[], 
-    '--k', type=int, default=[128, None, 128, None, 64, None, 64, None],
+    '--k', type=int, default=[], 
+    # '--k', type=int, default=[128, None, 128, None, 64, None, 64, None],
     # '--k', type=int, default=[128, None,128, None,128, None,128, None,128, None,128, None, 128, None, 64, None, 64, None],
     # '--k', type=int, default=20, 
     help='k nearest neighbour')

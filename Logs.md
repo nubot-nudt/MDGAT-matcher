@@ -24,9 +24,15 @@ gap_loss + var_loss*average_margin_loss
 
 
 
-**distribution5**						**对应distribution_v2**
+**distribution5**
 
 首先关注ot、average、var后逐渐增大对gap的权重
+
+
+
+**distribution6**						**对应distribution_v2**
+
+首先关注ot、average、var后逐渐增大对gap和var的权重，总体上var一直存在，权重不变
 
 
 
@@ -34,7 +40,13 @@ gap_loss + var_loss*average_margin_loss
 
 gap(取平均)+var+average     效果不理想
 
-gap(取平均)+var				
+gap(取平均)+var
+
+
+
+**distribution8**			
+
+gap+var
 
 
 

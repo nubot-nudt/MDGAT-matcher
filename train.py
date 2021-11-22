@@ -20,12 +20,12 @@ from torchvision import transforms
 # from logger import Logger
 from tensorboardX import SummaryWriter
 
-from models.superglue import SuperGlue
-from models.r_mdgat import r_MDGAT
-from models.r_mdgat2 import r_MDGAT2
-from models.r_mdgat3 import r_MDGAT3
-from models.r_mdgat4 import r_MDGAT4
-from models.mdgat import MDGAT
+from models.fa.superglue import SuperGlue
+from models.fa.r_mdgat import r_MDGAT
+from models.fa.r_mdgat2 import r_MDGAT2
+from models.fa.r_mdgat3 import r_MDGAT3
+from models.fa.r_mdgat4 import r_MDGAT4
+from models.fa.mdgat import MDGAT
 
 torch.set_grad_enabled(True)
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -65,7 +65,7 @@ parser.add_argument(
     help='If memory is enough, load all the data')
         
 parser.add_argument(
-    '--batch_size', type=int, default=32, #12
+    '--batch_size', type=int, default=1, #12
     help='Batch size')
 
 parser.add_argument(
@@ -79,16 +79,16 @@ parser.add_argument(
 parser.add_argument(
     # '--resume_model', type=str, default='/media/chenghao/本地磁盘/sch_ws/gnn/checkpoint/raw9-kNone-superglue-FPFH_only/nomutualcheck-raw-kNone-batch64-distance-superglue-FPFH_only-USIP/best_model_epoch_216(test_loss1.4080408022386168).pth')
     '--resume_model', type=str, default=
-    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat2-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat2-batch32-distance-distribution_loss-FPFH-USIP/model_epoch_239.pth',
+    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_118(val_loss0.3962240707615172).pth',
     help='Path to model to be Resumed')
 
 
 parser.add_argument(
-    '--net', type=str, default='rotatary_mdgat4', 
+    '--net', type=str, default='rotatary_mdgat', 
     help='Choose net structure : mdgat superglue rotatary_mdgat rotatary_mdgat2')
 
 parser.add_argument(
-    '--loss_method', type=str, default='distribution_loss',
+    '--loss_method', type=str, default='distribution_loss8',
     help='Choose loss function : superglue triplet_loss gap_loss gap_loss_plus distribution_loss')
 
 parser.add_argument(
@@ -158,13 +158,65 @@ parser.add_argument(
     '--rotation_augment', type=bool, default=True,
     help='perform random rotation on input')
 
+parser.add_argument(
+    '--cfg_file', type=str, default='cfgs/config.yaml',
+    help='specify the config for demo')
 
+from easydict import EasyDict
+import yaml
+def merge_new_config(config, new_config):
+    if '_BASE_CONFIG_' in new_config:
+        with open(new_config['_BASE_CONFIG_'], 'r') as f:
+            try:
+                yaml_config = yaml.load(f, Loader=yaml.FullLoader)
+            except:
+                yaml_config = yaml.load(f)
+        config.update(EasyDict(yaml_config))
 
+    for key, val in new_config.items():
+        if not isinstance(val, dict):
+            config[key] = val
+            continue
+        if key not in config:
+            config[key] = EasyDict()
+        merge_new_config(config[key], val)
+
+    return config
+
+def cfg_from_yaml_file(cfg_file, config):
+    with open(cfg_file, 'r') as f:
+        try:
+            new_config = yaml.load(f, Loader=yaml.FullLoader)
+        except:
+            new_config = yaml.load(f)
+
+        merge_new_config(config=config, new_config=new_config)
+
+    return config
 
 if __name__ == '__main__':
+
+    torch.multiprocessing.set_start_method('spawn')
     opt = parser.parse_args()
+    cfg = EasyDict()
+    cfg.ROOT_DIR = (Path(__file__).resolve().parent / './').resolve()
+    cfg.LOCAL_RANK = 0
+    cfg = cfg_from_yaml_file(opt.cfg_file, cfg)
+
+    point_cloud_range = np.array(cfg.DATA_CONFIG.POINT_CLOUD_RANGE)
+    grid_size = (point_cloud_range[3:6] - point_cloud_range[0:3]) / np.array(cfg.DATA_CONFIG.DATA_PROCESSOR[1].VOXEL_SIZE)
+    num_point_features = cfg.DATA_CONFIG.DATA_AUGMENTOR.AUG_CONFIG_LIST[0].NUM_POINT_FEATURES
+
+    model_info_dict = {
+            'module_list': [],
+            'num_rawpoint_features': num_point_features,
+            'num_point_features': num_point_features,
+            'grid_size': grid_size,
+            'point_cloud_range': point_cloud_range,
+            'voxel_size': cfg.DATA_CONFIG.DATA_PROCESSOR[1].VOXEL_SIZE 
+        }
     
-    from util.load_data import SparseDataset
+    from utils.load_data import SparseDataset
 
     
     if opt.net == 'raw':
@@ -177,9 +229,9 @@ if __name__ == '__main__':
 
     # 创建模型输出路径
     if opt.rotation_augment ==True:
-        model_out_path = '{}/{}/RotationAug/{}-{}-{}'.format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor)
+        model_out_path = '{}/{}/RotationAug/{}-{}-{}/{}'.format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor, opt.k)
     else:
-        model_out_path = '{}/{}/{}-{}-{}' .format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor)
+        model_out_path = '{}/{}/{}-{}-{}/{}' .format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor, opt.k)
 
     log_path = '{}/{}/logs'.format(model_out_path,model_name)
     log_path = Path(log_path)
@@ -268,8 +320,10 @@ if __name__ == '__main__':
         print('========================================\nStart new training')
 
 
-    train_set = SparseDataset(opt, 'train')
-    val_set = SparseDataset(opt, 'val')
+    train_set = SparseDataset(opt, 'train', cfg.DATA_CONFIG)
+    val_set = SparseDataset(opt, 'val', cfg.DATA_CONFIG)
+
+    
     
     val_loader = torch.utils.data.DataLoader(dataset=val_set, shuffle=False, batch_size=opt.batch_size, num_workers=10, drop_last=True, pin_memory = True)
     train_loader = torch.utils.data.DataLoader(dataset=train_set, shuffle=True, batch_size=opt.batch_size, num_workers=10, drop_last=True, pin_memory = True)
@@ -296,34 +350,36 @@ if __name__ == '__main__':
                         pred[k] = Variable(torch.stack(pred[k]).to(device))
                     # print(type(pred[k]))   #pytorch.tensor
             
-            # x= time.time()
+            # x= time.time().....
             data = net(pred) # 匹配结果
             # y= time.time()
             # print(x-y)
 
-            # 去除头字符，将匹配结果和源数据拼接
-            for k, v in pred.items(): # pred.items() 返回可遍历的元组数组
-                # print(type(k)) #str 头字符
-                # print(type(v)) #头对应的tensor
-                pred[k] = v[0]
-            pred = {**pred, **data}
+            
 
-            if 'skip_train' in pred: # has no keypoint
-                continue
+            # # 去除头字符，将匹配结果和源数据拼接
+            # for k, v in pred.items(): # pred.items() 返回可遍历的元组数组
+            #     # print(type(k)) #str 头字符
+            #     # print(type(v)) #头对应的tensor
+            #     pred[k] = v[0]
+            # pred = {**pred, **data}
 
-            # net.zero_grad() # 清空梯度
-            optimizer.zero_grad()
-            Loss = pred['loss']
-            Loss = torch.mean(Loss)
-            epoch_loss += Loss.item()
-            # mean_loss.append(Loss) # every 10 pairs
-            # batch_loss.append(Loss) # every 10 pairs
-            Loss.backward()
-            optimizer.step()
-            # lr_schedule.step()
+            # if 'skip_train' in pred: # has no keypoint
+            #     continue
 
-            # 删除变量释放显存
-            del Loss, pred, data, i
+            # # net.zero_grad() # 清空梯度
+            # optimizer.zero_grad()
+            # Loss = pred['loss']
+            # Loss = torch.mean(Loss)
+            # epoch_loss += Loss.item()
+            # # mean_loss.append(Loss) # every 10 pairs
+            # # batch_loss.append(Loss) # every 10 pairs
+            # Loss.backward()
+            # optimizer.step()
+            # # lr_schedule.step()
+
+            # # 删除变量释放显存
+            # del Loss, pred, data, i
 
         # validation
         '''
