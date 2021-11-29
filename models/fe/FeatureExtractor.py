@@ -12,10 +12,13 @@ from utils.utils_loss import (superglue, triplet, gap, gap_plus,
 
 
 from pcdet.ops.pointnet2.pointnet2_stack import pointnet2_utils as pointnet2_utils_stack
+
 import open3d as o3d 
 import os
 
 from utils import common_utils
+from functools import partial
+import spconv.pytorch as spconv
 
 class VFETemplate(nn.Module):
     def __init__(self, model_cfg, **kwargs):
@@ -37,19 +40,18 @@ class VFETemplate(nn.Module):
         """
         raise NotImplementedError
 
-class MeanVFE(VFETemplate):
-    def __init__(self, model_cfg, num_point_features, **kwargs):
-        super().__init__(model_cfg=model_cfg)
-        self.num_point_features = num_point_features
+class MeanVFE(nn.Module):
+    def __init__(self):
+        super().__init__()
 
-    def get_output_feature_dim(self):
-        return self.num_point_features
+    # def get_output_feature_dim(self):
+    #     return self.num_point_features
 
     def forward(self, batch_dict, **kwargs):
         """
         Args:
             batch_dict:
-                voxels: (num_voxels, max_points_per_voxel, C)
+                voxels: (batch, num_voxels, max_points_per_voxel, C)
                 voxel_num_points: optional (num_voxels)
             **kwargs:
 
@@ -57,8 +59,8 @@ class MeanVFE(VFETemplate):
             vfe_features: (num_voxels, C)
         """
         voxel_features, voxel_num_points = batch_dict['voxels'], batch_dict['voxel_num_points']
-        points_mean = voxel_features[:, :, :].sum(dim=1, keepdim=False)
-        normalizer = torch.clamp_min(voxel_num_points.view(-1, 1), min=1.0).type_as(voxel_features)
+        points_mean = voxel_features[:, :, :, :].sum(dim=2, keepdim=False)
+        normalizer = torch.clamp_min(voxel_num_points[:,:,None], min=1.0).type_as(voxel_features)
         points_mean = points_mean / normalizer
         batch_dict['voxel_features'] = points_mean.contiguous()
 
@@ -85,10 +87,145 @@ def post_act_block(in_channels, out_channels, kernel_size, indice_key=None, stri
 
     return m
     
-from functools import partial
-import spconv
-
 class VoxelBackBone8x(nn.Module):
+    '''spconv version. Still exists bug.'''
+    def __init__(self, model_cfg, input_channels, grid_size, **kwargs):
+        super().__init__()
+        self.model_cfg = model_cfg
+        norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
+
+        self.sparse_shape = grid_size[::-1] + [1, 0, 0]
+
+        # SPCONV_DEBUG_SAVE_PATH = "/home/chenghao/DL_workspace/Localization/debug",
+        self.conv_input = spconv.SparseSequential(
+            spconv.SubMConv3d(input_channels, 16, 3, padding=1, bias=False, indice_key='subm1'),
+            norm_fn(16),
+            nn.ReLU(),
+        )
+        block = post_act_block
+
+        self.conv1 = spconv.SparseSequential(
+            block(16, 16, 3, norm_fn=norm_fn, padding=1, indice_key='subm1'),
+        )
+
+        self.conv2 = spconv.SparseSequential(
+            # [1600, 1408, 41] <- [800, 704, 21]
+            block(16, 32, 3, norm_fn=norm_fn, stride=2, padding=1, indice_key='spconv2', conv_type='spconv'),
+            block(32, 32, 3, norm_fn=norm_fn, padding=1, indice_key='subm2'),
+            block(32, 32, 3, norm_fn=norm_fn, padding=1, indice_key='subm2'),
+        )
+
+        self.conv3 = spconv.SparseSequential(
+            # [800, 704, 21] <- [400, 352, 11]
+            block(32, 64, 3, norm_fn=norm_fn, stride=2, padding=1, indice_key='spconv3', conv_type='spconv'),
+            block(64, 64, 3, norm_fn=norm_fn, padding=1, indice_key='subm3'),
+            block(64, 64, 3, norm_fn=norm_fn, padding=1, indice_key='subm3'),
+        )
+
+        self.conv4 = spconv.SparseSequential(
+            # [400, 352, 11] <- [200, 176, 5]
+            block(64, 64, 3, norm_fn=norm_fn, stride=2, padding=(0, 1, 1), indice_key='spconv4', conv_type='spconv'),
+            block(64, 64, 3, norm_fn=norm_fn, padding=1, indice_key='subm4'),
+            block(64, 64, 3, norm_fn=norm_fn, padding=1, indice_key='subm4'),
+        )
+
+        last_pad = 0
+        last_pad = self.model_cfg.get('last_pad', last_pad)
+        self.conv_out = spconv.SparseSequential(
+            # [200, 150, 5] -> [200, 150, 2]
+            spconv.SparseConv3d(64, 128, (3, 1, 1), stride=(2, 1, 1), padding=last_pad,
+                                bias=False, indice_key='spconv_down2'),
+            norm_fn(128),
+            nn.ReLU(),
+        )
+        self.num_point_features = 128
+        self.backbone_channels = {
+            'x_conv1': 16,
+            'x_conv2': 32,
+            'x_conv3': 64,
+            'x_conv4': 64
+        }
+
+    def forward(self, batch_dict):
+        """
+        Args:
+            batch_dict:
+                batch_size: int
+                vfe_features: (num_voxels, C)
+                voxel_coords: (num_voxels, 4), [batch_idx, z_idx, y_idx, x_idx]
+        Returns:
+            batch_dict:
+                encoded_spconv_tensor: sparse tensor
+        """
+        voxel_features, voxel_coords = batch_dict['voxel_features'], batch_dict['voxel_coords']
+        # Z,Y,X = self.sparse_shape
+        # B,N,D = voxel_features.size()
+
+        # voxels = torch.zeros([B,Z,Y,X,D], device = voxel_features.device)
+        # voxel[:,:]
+
+        for key, val in batch_dict.items():
+            if key in ['voxels', 'voxel_num_points', 'voxel_features']:
+                coors = []
+                for i, coor in enumerate(val):
+                    coors.append(coor)
+                batch_dict[key] = torch.cat(coors,dim=0)
+                # batch = val.size()[0]
+                # batch_dict[key] = val.view(-1, m, d)
+                # ret[key] = np.concatenate(val, axis=0)
+            elif key in ['points', 'voxel_coords']:
+                coors = []
+                for i, coor in enumerate(val):
+                    '''[batch, n, dim]  -->  [n, 1+dim] (batch_idx, x, y, z)'''
+                    pad = nn.ConstantPad2d((0,1,0,0),i)
+                    coor_pad = pad(coor)
+                    # coor_pad = np.pad(coor, ((0, 0), (1, 0)), mode='constant', constant_values=i)
+                    coors.append(coor_pad)
+                batch_dict[key] = torch.cat(coors,dim=0)
+
+        input_sp_tensor = spconv.SparseConvTensor(
+            features=batch_dict['voxel_features'],
+            indices=batch_dict['voxel_coords'].int(),
+            spatial_shape=self.sparse_shape,
+            batch_size=batch_dict['batch_size']
+        )
+
+        x = self.conv_input(input_sp_tensor)
+
+        x_conv1 = self.conv1(x)
+        x_conv2 = self.conv2(x_conv1)
+        x_conv3 = self.conv3(x_conv2)
+        x_conv4 = self.conv4(x_conv3)
+
+        # for detection head
+        # [200, 176, 5] -> [200, 176, 2]
+        out = self.conv_out(x_conv4)
+
+        batch_dict.update({
+            'encoded_spconv_tensor': out,
+            'encoded_spconv_tensor_stride': 8
+        })
+        batch_dict.update({
+            'multi_scale_3d_features': {
+                'x_conv1': x_conv1,
+                'x_conv2': x_conv2,
+                'x_conv3': x_conv3,
+                'x_conv4': x_conv4,
+            }
+        })
+        batch_dict.update({
+            'multi_scale_3d_strides': {
+                'x_conv1': 1,
+                'x_conv2': 2,
+                'x_conv3': 4,
+                'x_conv4': 8,
+            }
+        })
+
+        return batch_dict
+
+class VoxelBackBone8x_spconv(nn.Module):
+    '''spconv version. Still exists bug.'''
     def __init__(self, model_cfg, input_channels, grid_size, **kwargs):
         super().__init__()
         self.model_cfg = model_cfg
@@ -145,31 +282,6 @@ class VoxelBackBone8x(nn.Module):
             'x_conv4': 64
         }
 
-class HeightCompression(nn.Module):
-    def __init__(self, model_cfg, **kwargs):
-        super().__init__()
-        self.model_cfg = model_cfg
-        self.num_bev_features = self.model_cfg.NUM_BEV_FEATURES
-
-    def forward(self, batch_dict):
-        """
-        Args:
-            batch_dict:
-                encoded_spconv_tensor: sparse tensor
-        Returns:
-            batch_dict:
-                spatial_features:
-
-        """
-        encoded_spconv_tensor = batch_dict['encoded_spconv_tensor']
-        spatial_features = encoded_spconv_tensor.dense()
-        N, C, D, H, W = spatial_features.shape
-        spatial_features = spatial_features.view(N, C * D, H, W)
-        batch_dict['spatial_features'] = spatial_features
-        batch_dict['spatial_features_stride'] = batch_dict['encoded_spconv_tensor_stride']
-        return batch_dict
-
-
     def forward(self, batch_dict):
         """
         Args:
@@ -181,13 +293,30 @@ class HeightCompression(nn.Module):
             batch_dict:
                 encoded_spconv_tensor: sparse tensor
         """
-        voxel_features, voxel_coords = batch_dict['voxel_features'], batch_dict['voxel_coords']
-        batch_size = batch_dict['batch_size']
+        for key, val in batch_dict.items():
+            if key in ['voxels', 'voxel_num_points', 'voxel_features']:
+                coors = []
+                for i, coor in enumerate(val):
+                    coors.append(coor)
+                batch_dict[key] = torch.cat(coors,dim=0)
+                # batch = val.size()[0]
+                # batch_dict[key] = val.view(-1, m, d)
+                # ret[key] = np.concatenate(val, axis=0)
+            elif key in ['points', 'voxel_coords']:
+                coors = []
+                for i, coor in enumerate(val):
+                    '''[batch, n, dim]  -->  [n, 1+dim] (batch_idx, x, y, z)'''
+                    pad = nn.ConstantPad2d((1,0,0,0),i)
+                    coor_pad = pad(coor)
+                    # coor_pad = np.pad(coor, ((0, 0), (1, 0)), mode='constant', constant_values=i)
+                    coors.append(coor_pad)
+                batch_dict[key] = torch.cat(coors,dim=0)
+
         input_sp_tensor = spconv.SparseConvTensor(
-            features=voxel_features,
-            indices=voxel_coords.int(),
+            features=batch_dict['voxel_features'],
+            indices=batch_dict['voxel_coords'].int(),
             spatial_shape=self.sparse_shape,
-            batch_size=batch_size
+            batch_size=batch_dict['batch_size']
         )
 
         x = self.conv_input(input_sp_tensor)
@@ -222,6 +351,30 @@ class HeightCompression(nn.Module):
             }
         })
 
+        return batch_dict
+
+class HeightCompression(nn.Module):
+    def __init__(self, model_cfg, **kwargs):
+        super().__init__()
+        self.model_cfg = model_cfg
+        self.num_bev_features = self.model_cfg.NUM_BEV_FEATURES
+
+    def forward(self, batch_dict):
+        """
+        Args:
+            batch_dict:
+                encoded_spconv_tensor: sparse tensor
+        Returns:
+            batch_dict:
+                spatial_features:
+
+        """
+        encoded_spconv_tensor = batch_dict['encoded_spconv_tensor']
+        spatial_features = encoded_spconv_tensor.dense()
+        N, C, D, H, W = spatial_features.shape
+        spatial_features = spatial_features.view(N, C * D, H, W)
+        batch_dict['spatial_features'] = spatial_features
+        batch_dict['spatial_features_stride'] = batch_dict['encoded_spconv_tensor_stride']
         return batch_dict
 
 
@@ -367,6 +520,7 @@ def bilinear_interpolate_torch(im, x, y):
     ans = torch.t((torch.t(Ia) * wa)) + torch.t(torch.t(Ib) * wb) + torch.t(torch.t(Ic) * wc) + torch.t(torch.t(Id) * wd)
     return ans
 
+from pcdet.ops.pointnet2.pointnet2_stack import pointnet2_modules as pointnet2_stack_modules
 
 class VoxelSetAbstraction(nn.Module):
     def __init__(self, model_cfg, voxel_size, point_cloud_range, num_bev_features=None,
@@ -571,103 +725,46 @@ class VoxelSetAbstraction(nn.Module):
 
 
 class FeatureExtractor(nn.Module):
-    default_config = {
-        'descriptor_dim': 144,
-        'keypoint_encoder': [32, 64, 128],
-        'descritor_encoder': [64, 144],
-        'GNN_layers': ['self', 'cross'] * 9,
-        'sinkhorn_iterations': 100,
-        'match_threshold': 0.2,
-        'resolving_distance': 50
-    }
+    # default_config = {
+    #     'descriptor_dim': 144,
+    #     'keypoint_encoder': [32, 64, 128],
+    #     'descritor_encoder': [64, 144],
+    #     'GNN_layers': ['self', 'cross'] * 9,
+    #     'sinkhorn_iterations': 100,
+    #     'match_threshold': 0.2,
+    #     'resolving_distance': 50
+    # }
 
-    def __init__(self, config):
+    def __init__(self, cfgs, dataset):
         super().__init__()
-        self.config = {**self.default_config, **config}
+        # self.config = {**self.default_config, **config}
 
         
 
         self.vfe = MeanVFE()
+        self.vconv = VoxelBackBone8x(cfgs.BACKBONE_3D, dataset.num_point_features, dataset.grid_size)
+        self.hc = HeightCompression(cfgs.MAP_TO_BEV)
+        self.pfe = VoxelSetAbstraction(cfgs.PFE, dataset.voxel_size, dataset.point_cloud_range, self.hc.num_bev_features, dataset.num_point_features)
 
     def forward(self, data):
-        """Run SuperGlue on a pair of keypoints and descriptors"""
+        """Run PVRCNN on keypoints:MEANVFE + VoxelBackBone8x + HeightCompression +
+            VoxelSetAbstraction + BaseBEVBackbone
+        """
         
         kpts0, kpts1 = data['keypoints0'].double(), data['keypoints1'].double()
-        lrf0, lrf1 = data['lrf0'].double(), data['lrf1'].double()
-        pc0, pc1 = data['cloud0'], data['cloud1']
 
-        batch_size, _, _ = pc0.size()
+        batch_size, _, _ = kpts0.size()
 
         x = time.time()
          
-        fps_path = 'fps/{}'.format(data['sequence'][0])
-        if not os.path.exists(fps_path):
-            os.makedirs(fps_path) 
-        
-        fps_txt = '{}/{:0>6d}.bin'.format(fps_path,data['idx0'].cpu().numpy()[0])
-        if not os.path.exists(fps_txt):
-            cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
-                pc0.contiguous(), 2048
-            ).long()[0]
+        batch_dict0, batch_dict1 = {}, {}
+        batch_dict0['voxels'], batch_dict1['voxels'] = data['voxels0'], data['voxels1']
+        batch_dict0['voxel_coords'], batch_dict1['voxel_coords'] = data['voxel_coords0'], data['voxel_coords1']
+        batch_dict0['voxel_num_points'], batch_dict1['voxel_num_points'] = data['voxel_num_points0'], data['voxel_num_points1']
+        batch_dict0['batch_size'] = batch_dict1['batch_size'] = batch_size
 
-            batch_idx = torch.arange(0, 1, dtype=int).view(-1, 1).repeat(1, 2048)
-            pc0 = pc0.reshape((1,-1,8))[:,:,:3]
-
-            indx = cur_pt_idxs.cpu().numpy()
-            fp = pc0[batch_idx,indx,:]
-            fp.cpu().numpy().astype(np.float32).tofile(fps_txt)
-   
-            # point_cloud_o3d2 = o3d.geometry.PointCloud()
-            # point_cloud_o3d2.points = o3d.utility.Vector3dVector(fp.cpu().numpy()[0,:,:])
-            # point_cloud_o3d2.translate(np.asarray([0, 120, 0]))
-
-            # point_cloud_o3d = o3d.geometry.PointCloud()
-            # point_cloud_o3d.points = o3d.utility.Vector3dVector(pc0.cpu().numpy()[0, :, :3])
-            # o3d.visualization.draw_geometries([point_cloud_o3d+point_cloud_o3d2])
-
-            # pc1 = np.fromfile('/home/chenghao/DL_workspace/Localization/fps/06/000137.bin', dtype=np.float32)
-            # pc1 = pc1.reshape((-1, 3))
-
-            # point_cloud_o3d2 = o3d.geometry.PointCloud()
-            # point_cloud_o3d2.points = o3d.utility.Vector3dVector(np.asarray(pc1))
-            # point_cloud_o3d2.translate(np.asarray([0, 120, 0]))
-            # o3d.visualization.draw_geometries([point_cloud_o3d2])
-        
-            # indx = cur_pt_idxs.cpu().numpy()
-            # np.savetxt(fps_txt,indx.astype(int))
-        
-        fps2_txt = '{}/{:0>6d}.bin'.format(fps_path,data['idx1'].cpu().numpy()[0])
-        if not os.path.exists(fps2_txt):
-            cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
-                pc1.contiguous(), 2048
-            ).long()[0]
-
-            batch_idx = torch.arange(0, 1, dtype=int).view(-1, 1).repeat(1, 2048)
-            pc1 = pc1.reshape((1,-1,8))[:,:,:3]
-
-            indx = cur_pt_idxs.cpu().numpy()
-            fp = pc1[batch_idx,indx,:]
-            fp.cpu().numpy().astype(np.float32).tofile(fps2_txt)
-
-            # point_cloud_o3d2 = o3d.geometry.PointCloud()
-            # point_cloud_o3d2.points = o3d.utility.Vector3dVector(fp.cpu().numpy()[0,:,:])
-            # point_cloud_o3d2.translate(np.asarray([0, 120, 0]))
-
-            # point_cloud_o3d = o3d.geometry.PointCloud()
-            # point_cloud_o3d.points = o3d.utility.Vector3dVector(pc1.cpu().numpy()[0, :, :3])
-            # o3d.visualization.draw_geometries([point_cloud_o3d+point_cloud_o3d2])
-
-            # fp = pc1[batch_idx,indx,:]
-            # output = fp.astype(np.float32)
-            # output.tofile(fps2_txt)
-
-           
-        
-            # indx = cur_pt_idxs.cpu().numpy()
-            # np.savetxt(fps2_txt,indx.astype(int))
-        
-        # # np.loadtxt('{}/{:0>6d}'.format(fps_path,data['idx0'].cpu().numpy()[0]))
-
+        batch_dict0 = self.vfe(batch_dict0)
+        batch_dict0 = self.vconv(batch_dict0)
         return None
 
         # batch_idx = torch.arange(0, batch_size, dtype=int).view(-1, 1).repeat(1, 2048)

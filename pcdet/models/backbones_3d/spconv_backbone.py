@@ -1,6 +1,6 @@
 from functools import partial
 
-import spconv
+import spconv.pytorch as spconv
 import torch.nn as nn
 
 
@@ -26,7 +26,7 @@ def post_act_block(in_channels, out_channels, kernel_size, indice_key=None, stri
     return m
 
 
-class SparseBasicBlock(spconv.SparseModule):
+class SparseBasicBlock(spconv.modules.SparseModule):
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, norm_fn=None, downsample=None, indice_key=None):

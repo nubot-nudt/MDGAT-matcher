@@ -27,194 +27,63 @@ from models.fa.r_mdgat3 import r_MDGAT3
 from models.fa.r_mdgat4 import r_MDGAT4
 from models.fa.mdgat import MDGAT
 
+from models.fe.FeatureExtractor import FeatureExtractor
+
 torch.set_grad_enabled(True)
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 
-parser = argparse.ArgumentParser(
-    description='Image pair matching and pose evaluation with SuperGlue',
-    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+# parser = argparse.ArgumentParser(
+#     description=' ',
+#     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+# parser.add_argument(
+#     '--learning_rate', type=int, default=0.0001,  #0.0001
+#     help='Learning rate')
 
-parser.add_argument(
-    '--sinkhorn_iterations', type=int, default=20,
-    help='Number of Sinkhorn iterations performed by SuperGlue')
+# parser.add_argument(
+#     '--epoch', type=int, default=1000,
+#     help='Number of epoches')
 
-parser.add_argument(
-    '--match_threshold', type=float, default=0.2,
-    help='SuperGlue match threshold')
+# parser.add_argument(
+#     '--rotation_augment', type=bool, default=True,
+#     help='perform random rotation on input')
 
-parser.add_argument(
-    '--learning_rate', type=int, default=0.0001,  #0.0001
-    help='Learning rate')
+# parser.add_argument(
+#     '--train_mode', type=str, default='distance', 
+#     help='Select train frame by: "kframe", "distance" or "overlap".')
 
-parser.add_argument(
-    '--epoch', type=int, default=1000,
-    help='Number of epoches')
-
-parser.add_argument(
-    '--kframe', type=int, default=1,
-    help='Number of skip frames for training')
-
-
-parser.add_argument(
-    '--train_mode', type=str, default='distance', 
-    help='Select train frame by: "kframe", "distance" or "overlap".')
-
-parser.add_argument(
-    '--memory_is_enough', type=bool, default=False, 
-    help='If memory is enough, load all the data')
+# parser.add_argument(
+#     '--memory_is_enough', type=bool, default=False, 
+#     help='If memory is enough, load all the data')
         
-parser.add_argument(
-    '--batch_size', type=int, default=1, #12
-    help='Batch size')
+# parser.add_argument(
+#     '--batch_size', type=int, default=2, #12
+#     help='Batch size')
 
-parser.add_argument(
-    '--local_rank', type=int, default=[0,1,2,3], 
-    help='Used gpu label')
+# parser.add_argument(
+#     '--local_rank', type=int, default=[0,1,2,3], 
+#     help='Used gpu label')
 
-parser.add_argument(
-    '--resume', type=bool, default=False, # True False
-    help='Resuming from existing model')
+# parser.add_argument(
+#     '--resume', type=bool, default=False, # True False
+#     help='Resuming from existing model')
 
-parser.add_argument(
-    # '--resume_model', type=str, default='/media/chenghao/本地磁盘/sch_ws/gnn/checkpoint/raw9-kNone-superglue-FPFH_only/nomutualcheck-raw-kNone-batch64-distance-superglue-FPFH_only-USIP/best_model_epoch_216(test_loss1.4080408022386168).pth')
-    '--resume_model', type=str, default=
-    '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_118(val_loss0.3962240707615172).pth',
-    help='Path to model to be Resumed')
+# parser.add_argument(
+#     # '--resume_model', type=str, default='/media/chenghao/本地磁盘/sch_ws/gnn/checkpoint/raw9-kNone-superglue-FPFH_only/nomutualcheck-raw-kNone-batch64-distance-superglue-FPFH_only-USIP/best_model_epoch_216(test_loss1.4080408022386168).pth')
+#     '--resume_model', type=str, default=
+#     '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_118(val_loss0.3962240707615172).pth',
+#     help='Path to model to be Resumed')
 
 
-parser.add_argument(
-    '--net', type=str, default='rotatary_mdgat', 
-    help='Choose net structure : mdgat superglue rotatary_mdgat rotatary_mdgat2')
 
-parser.add_argument(
-    '--loss_method', type=str, default='distribution_loss8',
-    help='Choose loss function : superglue triplet_loss gap_loss gap_loss_plus distribution_loss')
-
-parser.add_argument(
-    '--mutual_check', type=bool, default=False,  # True False
-    help='If perform mutual check')
-
-parser.add_argument(
-    '--k', type=int, default=[128, None, 128, None, 64, None, 64, None], 
-    # '--k', type=int, default=[], 
-    help='Mdgat structure')
-
-parser.add_argument(
-    '--l', type=int, default=9, 
-    help='Layers number')
-
-parser.add_argument(
-    '--descriptor', type=str, default='FPFH', 
-    help='Choose keypoint descriptor : FPFH pointnet pointnetmsg FPFH_gloabal FPFH_only')
-# if parser.parse_args().descriptor == 'pointnet' or parser.parse_args().descriptor == 'pointnetmsg':
-
-parser.add_argument(
-    '--keypoints', type=str, default='USIP', 
-    help='Choose keypoints : sharp USIP lessharp')
-
-parser.add_argument(
-    '--threshold', type=float, default=0.5, 
-    help='Ground truth distance threshold')
-
-parser.add_argument(
-    '--ensure_kpts_num', type=bool, default=True, 
-    help='')
-
-parser.add_argument(
-    '--max_keypoints', type=int, default=512,  #1024
-    help='Maximum number of keypoints'
-            ' (\'-1\' keeps all keypoints)')
-
-parser.add_argument(
-    '--triplet_loss_gamma', type=float, default=0.5,  
-    help='Threshold for triplet loss and gap loss')
-
-parser.add_argument(
-    '--dataset', type=str, default='kitti',  
-    help='Used dataset')
-
-parser.add_argument(
-    '--train_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry', 
-    help='Path to the directory of training imgs.')
-
-parser.add_argument(
-    '--keypoints_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/keypoints_USIP/tsf_256_FPFH_16384-512-k1k16-2d-nonoise',
-    help='Path to the directory of kepoints.')
-
-parser.add_argument(
-    '--preprocessed_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/preprocess-undownsample-n8', 
-    help='Path to the directory of preprocessed kitti odometry point cloud.')
-
-parser.add_argument(
-    '--txt_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/preprocess-random-full', 
-    help='Path to the directory of pairs.')
-
-parser.add_argument(
-    '--model_out_path', type=str, default='/home/chenghao/Mount/sch_ws/gnn/checkpoint',
-    help='Output model path')
-
-parser.add_argument(
-    '--rotation_augment', type=bool, default=True,
-    help='perform random rotation on input')
-
-parser.add_argument(
-    '--cfg_file', type=str, default='cfgs/config.yaml',
-    help='specify the config for demo')
-
-from easydict import EasyDict
-import yaml
-def merge_new_config(config, new_config):
-    if '_BASE_CONFIG_' in new_config:
-        with open(new_config['_BASE_CONFIG_'], 'r') as f:
-            try:
-                yaml_config = yaml.load(f, Loader=yaml.FullLoader)
-            except:
-                yaml_config = yaml.load(f)
-        config.update(EasyDict(yaml_config))
-
-    for key, val in new_config.items():
-        if not isinstance(val, dict):
-            config[key] = val
-            continue
-        if key not in config:
-            config[key] = EasyDict()
-        merge_new_config(config[key], val)
-
-    return config
-
-def cfg_from_yaml_file(cfg_file, config):
-    with open(cfg_file, 'r') as f:
-        try:
-            new_config = yaml.load(f, Loader=yaml.FullLoader)
-        except:
-            new_config = yaml.load(f)
-
-        merge_new_config(config=config, new_config=new_config)
-
-    return config
+from args import parse_config
 
 if __name__ == '__main__':
 
     torch.multiprocessing.set_start_method('spawn')
-    opt = parser.parse_args()
-    cfg = EasyDict()
-    cfg.ROOT_DIR = (Path(__file__).resolve().parent / './').resolve()
-    cfg.LOCAL_RANK = 0
-    cfg = cfg_from_yaml_file(opt.cfg_file, cfg)
 
-    point_cloud_range = np.array(cfg.DATA_CONFIG.POINT_CLOUD_RANGE)
-    grid_size = (point_cloud_range[3:6] - point_cloud_range[0:3]) / np.array(cfg.DATA_CONFIG.DATA_PROCESSOR[1].VOXEL_SIZE)
-    num_point_features = cfg.DATA_CONFIG.DATA_AUGMENTOR.AUG_CONFIG_LIST[0].NUM_POINT_FEATURES
-
-    model_info_dict = {
-            'module_list': [],
-            'num_rawpoint_features': num_point_features,
-            'num_point_features': num_point_features,
-            'grid_size': grid_size,
-            'point_cloud_range': point_cloud_range,
-            'voxel_size': cfg.DATA_CONFIG.DATA_PROCESSOR[1].VOXEL_SIZE 
-        }
+    opt, cfgs = parse_config()
+    # opt = parser.parse_args()
     
     from utils.load_data import SparseDataset
 
@@ -245,6 +114,14 @@ if __name__ == '__main__':
     print("Train",opt.net,"net with \nStructure k:",opt.k,"\nDescriptor: ",opt.descriptor,"\nLoss: ",opt.loss_method,"\nin Dataset: ",opt.dataset,
     "\n========================================",
     "\nmodel_out_path: ", model_out_path)
+
+
+    train_set = SparseDataset(opt, 'train', cfgs.DATA_CONFIG)
+    val_set = SparseDataset(opt, 'val', cfgs.DATA_CONFIG)
+
+    val_loader = torch.utils.data.DataLoader(dataset=val_set, shuffle=False, batch_size=opt.batch_size, num_workers=1, drop_last=True, pin_memory = True)
+    train_loader = torch.utils.data.DataLoader(dataset=train_set, shuffle=False, batch_size=opt.batch_size, num_workers=1, drop_last=True, pin_memory = True)
+    
    
     if opt.resume:        
         path_checkpoint = opt.resume_model  # 断点路径
@@ -259,6 +136,10 @@ if __name__ == '__main__':
         best_loss = 1e6
         best_epoch = None
         lr=opt.learning_rate
+
+
+    fe_net = FeatureExtractor(cfgs.MODEL, train_set)
+    
     
     config = {
             'net': {
@@ -293,19 +174,22 @@ if __name__ == '__main__':
     if torch.cuda.is_available():
         # torch.cuda.set_device(opt.local_rank)
         device=torch.device('cuda:{}'.format(opt.local_rank[0]))
-        if torch.cuda.device_count() > 1:
-            # os.environ['MASTER_ADDR'] = 'localhost'
-            # os.environ['MASTER_PORT'] = '12355'
-            print("Let's use", torch.cuda.device_count(), "GPUs!")
-            # dim = 0 [30, xxx] -> [10, ...], [10, ...], [10, ...] on 3 GPUs
-            # torch.distributed.init_process_group(backend="nccl", init_method='env://')
-            net = torch.nn.DataParallel(net, device_ids=opt.local_rank)
-        else:
-            net = torch.nn.DataParallel(net)
+        # if torch.cuda.device_count() > 1:
+        #     # os.environ['MASTER_ADDR'] = 'localhost'
+        #     # os.environ['MASTER_PORT'] = '12355'
+        #     print("Let's use", torch.cuda.device_count(), "GPUs!")
+        #     # dim = 0 [30, xxx] -> [10, ...], [10, ...], [10, ...] on 3 GPUs
+        #     # torch.distributed.init_process_group(backend="nccl", init_method='env://')
+        #     # net = torch.nn.DataParallel(net, device_ids=opt.local_rank)
+        #     fe_net = torch.nn.DataParallel(fe_net, device_ids=opt.local_rank)
+        # else:
+        #     # net = torch.nn.DataParallel(net)
+        #     fe_net = torch.nn.DataParallel(fe_net)
     else:
         device = torch.device("cpu")
         print("### CUDA not available ###")
-    net.to(device)
+    fe_net.to(device)
+    # net.to(device)
 
     # 加载模型参数
     if opt.resume:
@@ -320,22 +204,15 @@ if __name__ == '__main__':
         print('========================================\nStart new training')
 
 
-    train_set = SparseDataset(opt, 'train', cfg.DATA_CONFIG)
-    val_set = SparseDataset(opt, 'val', cfg.DATA_CONFIG)
-
-    
-    
-    val_loader = torch.utils.data.DataLoader(dataset=val_set, shuffle=False, batch_size=opt.batch_size, num_workers=10, drop_last=True, pin_memory = True)
-    train_loader = torch.utils.data.DataLoader(dataset=train_set, shuffle=True, batch_size=opt.batch_size, num_workers=10, drop_last=True, pin_memory = True)
     
     mean_loss = []
     for epoch in range(start_epoch, opt.epoch+1):
         epoch_loss = 0
         current_loss = 0
         net.double().train() # 保证BN层用每一批数据的均值和方差,并启用dropout随机取一部分网络连接来训练更新参数
+        fe_net.double().train()
+        
         train_loader = tqdm(train_loader) # 使循环有进度条显示
-
-        begin = time.time()
         for i, pred in enumerate(train_loader):
             # 将数据传入cuda            # print(type(pred))   #dict
             # print(pred)
@@ -350,10 +227,9 @@ if __name__ == '__main__':
                         pred[k] = Variable(torch.stack(pred[k]).to(device))
                     # print(type(pred[k]))   #pytorch.tensor
             
-            # x= time.time().....
-            data = net(pred) # 匹配结果
-            # y= time.time()
-            # print(x-y)
+            data = fe_net(pred)
+            # data = net(data) 
+         
 
             
 

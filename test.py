@@ -7,7 +7,7 @@ import matplotlib.cm as cm
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
-from util.load_data import SparseDataset
+from utils.load_data import SparseDataset
 import os
 import torch.multiprocessing
 from tqdm import tqdm
@@ -20,7 +20,7 @@ import pykitti
 import torchvision
 from torchvision import transforms
 
-from util.utils_test import (calculate_error, solve_icp, point2inch,
+from utils.utils_test import (calculate_error, solve_icp, point2inch,
                             align_vector_to_another, normalized, LineMesh,
                             plot_match)
 
@@ -38,7 +38,7 @@ torch.set_grad_enabled(True)
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 parser = argparse.ArgumentParser(
-    description='Image pair matching and pose evaluation with SuperGlue',
+    description=' ',
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
 parser.add_argument(
@@ -47,59 +47,11 @@ parser.add_argument(
 
 parser.add_argument(
     '--vis_line_width', type=float, default=0.2,
-    help='the width of the match line in ')
+    help='the width of the match line')
 
 parser.add_argument(
     '--calculate_pose', type=bool, default=True,
     help='registrate the point cloud using the matched point pairs and calculate the pose')
-
-parser.add_argument(
-    '--sinkhorn_iterations', type=int, default=20,
-    help='Number of Sinkhorn iterations performed by SuperGlue')
-
-parser.add_argument(
-    '--learning_rate', type=int, default=0.0001,  #0.0001
-    help='Learning rate')
-    
-parser.add_argument(
-    '--batch_size', type=int, default=1, #12
-    help='batch_size')
-
-parser.add_argument(
-    '--train_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/', # MSCOCO2014_yingxin
-    help='Path to the directory of training scans.')
-
-parser.add_argument(
-    '--kframe', type=int, default=1,
-    help='Number of skip frames for training')
-
-parser.add_argument(
-    '--train_mode', type=str, default='distance', 
-    help='select train frame by: "kframe", "distance" or "overlap".')
-
-parser.add_argument(
-    '--model_out_path', type=str, default='./models/checkpoint',
-    help='Number of skip frames for training')
-
-parser.add_argument(
-    '--preprocessed_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/preprocess-undownsample-n8', 
-    help='Path to the directory of kepoints.')
-
-parser.add_argument(
-    '--memory_is_enough', type=bool, default=True, 
-    help='If true load all the scans')
-
-parser.add_argument(
-    '--local_rank', type=int, default=[0], 
-    help='select train frame by: "kframe", "distance" or "overlap".')
-
-parser.add_argument(
-    '--txt_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/preprocess-random[0,9]',  #preprocess-random-full  preprocess-kframe1 preprocess-random[0,9]
-    help='Path to the directory of kepoints.')
-
-parser.add_argument(
-    '--keypoints_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/keypoints_USIP/tsf_256_FPFH_16384-512-k1k16-2d-nonoise',
-    help='Path to the directory of kepoints.')
 
 parser.add_argument(
     '--resume_model', type=str, default=
@@ -110,72 +62,17 @@ parser.add_argument(
     #/home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss0.2964696381900756).pth
     # /home/nubot/DL_workspace/SuperGlue-pytorch-master/models/checkpoint/best_model(test_loss0.4375295043236407).pth
 
-parser.add_argument(
-    '--loss_method', type=str, default='distribution_loss', 
-    help='mine triplet_loss superglue gap_loss gap_loss_plusplus distribution_loss5')
-
-parser.add_argument(
-    '--net', type=str, default='rotatary_mdgat', 
-    help='mdgat; superglue; rotatary_mdgat rotatary_mdgat2')
-
-parser.add_argument(
-    '--mutual_check', type=bool, default=False,
-    help='')
-
-parser.add_argument(
-    '--k', type=int, default=[], 
-    # '--k', type=int, default=[128, None, 128, None, 64, None, 64, None],
-    # '--k', type=int, default=[128, None,128, None,128, None,128, None,128, None,128, None, 128, None, 64, None, 64, None],
-    # '--k', type=int, default=20, 
-    help='k nearest neighbour')
-
-parser.add_argument(
-    '--l', type=int, default=9, 
-    help='FPFH pointnet')
-
-parser.add_argument(
-    '--descriptor', type=str, default='FPFH', 
-    help='FPFH pointnet FPFH_only')
-
-parser.add_argument(
-    '--keypoints', type=str, default='USIP', 
-    help='sharp USIP lessharp')
-
-parser.add_argument(
-    '--threshold', type=float, default=0.5, 
-    help='sharp USIP lessharp')
-
-parser.add_argument(
-    '--ensure_kpts_num', type=bool, default=False, 
-    help='sharp USIP lessharp')
-
-parser.add_argument(
-    '--max_keypoints', type=int, default=256,  #1024
-    help='Maximum number of keypoints detected by Superpoint'
-            ' (\'-1\' keeps all keypoints)')
-
-parser.add_argument(
-    '--triplet_loss_gamma', type=float, default=0.5,  
-    help='')
-
-parser.add_argument(
-    '--match_threshold', type=float, default=0.003,     #0.2
-    help='SuperGlue match threshold')
-
-parser.add_argument(
-    '--train_step', type=int, default=2,  
-    help='pointnet描述子采用双阶段训练')
-
-parser.add_argument(
-    '--rotation_augment', type=bool, default=True,
-    help='perform random rotation on input')
+from args import parse_config
 
 if __name__ == '__main__':
-    opt = parser.parse_args()
+    torch.multiprocessing.set_start_method('spawn')
+    opt, cfgs = parse_config()
+
+    # opt = parser.parse_args()
 
     # 特征点，生成描述子和真值匹配 
-    test_set = SparseDataset(opt, 'test')
-    test_loader = torch.utils.data.DataLoader(dataset=test_set, shuffle=False, batch_size=opt.batch_size, num_workers=1, drop_last=True, pin_memory = True)
+    test_set = SparseDataset(opt, 'test', cfgs.DATA_CONFIG)
+    test_loader = torch.utils.data.DataLoader(dataset=test_set, shuffle=False, batch_size=1, num_workers=1, drop_last=True, pin_memory = True)
  
     path_checkpoint = opt.resume_model  # 断点路径
     checkpoint = torch.load(path_checkpoint, map_location={'cuda:2':'cuda:0'})  # 加载断点
@@ -191,11 +88,10 @@ if __name__ == '__main__':
             'descriptor': opt.descriptor,
             'mutual_check': opt.mutual_check,
             'triplet_loss_gamma': opt.triplet_loss_gamma,
-            'train_step':opt.train_step,
             'L':opt.l,
             'local_rank':opt.local_rank,
             'lamda':0
-        }
+        } 
     }
     # print(opt.net)
     if opt.net == 'superglue':
@@ -262,7 +158,7 @@ if __name__ == '__main__':
             ### eval ###
             # evaluate loss.
             begin = time.time()
-            net.double().eval()                
+            net.double().eval()
             for k in pred:
                 # if k != 'file_name' and k!='cloud0' and k!='cloud1':
                 if k!='idx0' and k!='idx1' and k!='sequence':

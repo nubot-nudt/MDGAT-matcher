@@ -1,5 +1,5 @@
 DATASET: 'KittiDataset'
-DATA_PATH: '../data/kitti'
+DATA_PATH: '/home/chenghao/Mount/Dataset/KITTI_odometry'
 
 POINT_CLOUD_RANGE: [-70.4, -40, -3, 70.4, 40, 1]
 
