@@ -258,8 +258,64 @@ class SparseDataset(Dataset):
                 self.lrf[sequence] = lrfs
     
     def transform_points_to_voxels(self, points):
-        from spconv.pytorch.utils import PointToVoxel
+        '''torchsparse'''
+        # from torchsparse.utils.quantize import sparse_quantize
+        # inputs = np.random.uniform(-100, 100, size=(10000, 4))
 
+        # coords, feats = inputs[:, :3], inputs
+        # coords -= np.min(coords, axis=0, keepdims=True)
+        # coords, indices = sparse_quantize(coords,
+        #                                   0.2,
+        #                                   return_index=True)
+        # coords = torch.tensor(coords, dtype=torch.int)
+        # feats = torch.tensor(feats[indices], dtype=torch.float)
+
+        # from torch import nn
+        # from torchsparse import SparseTensor
+        # from torchsparse import nn as spnn
+        # pad = nn.ConstantPad2d((0,1,0,0),0)
+        # coords = pad(coords)
+        # input_sp_tensor = SparseTensor(coords=coords, feats=feats)
+        # net = nn.Sequential(
+        #     spnn.Conv3d(4, 16, 3, bias=False),
+        #     spnn.BatchNorm(16),
+        #     spnn.ReLU(True),
+        # )
+        # x = net(input_sp_tensor)
+
+        '''spconv 1.2'''
+        # import spconv
+        # voxel_generator = spconv.utils.VoxelGenerator(
+        #     voxel_size=self.voxel_size,
+        #     point_cloud_range=self.point_cloud_range,
+        #     max_num_points=self.max_num_points,
+        #     max_voxels=self.max_voxels,
+        #     # full_mean=False
+        # )        
+        # # pc = np.random.uniform(-10, 10, size=[1000, 3])
+        # voxel_features, voxel_coords, num_points = voxel_generator.generate(points.astype(np.float32))
+        # voxel_features = voxel_features[:,0,:]
+        # voxel_coords = np.pad(voxel_coords, ((0, 0), (1, 0)), mode='constant', constant_values=0)
+        # voxel_coords = torch.tensor(voxel_coords, dtype=torch.int32)
+        # voxel_features = torch.tensor(voxel_features, dtype=torch.float32)
+        # # self.shape = [80, 200, 200]
+        # x = spconv.SparseConvTensor(voxel_features, voxel_coords, self.grid_size, 1)
+        
+        
+        '''spconv 2'''
+        # from spconv.pytorch.utils import PointToVoxel, gather_features_by_pc_voxel_id
+        # # this generator generate ZYX indices.
+        # gen = PointToVoxel(
+        #     vsize_xyz=[0.1, 0.1, 0.1], 
+        #     coors_range_xyz=[-80, -80, -2, 80, 80, 6], 
+        #     num_point_features=3, 
+        #     max_num_voxels=5000, 
+        #     max_num_points_per_voxel=5)
+        # pc = np.random.uniform(-10, 10, size=[1000, 3])
+        # pc_th = torch.from_numpy(pc)
+        # voxels, coords, num_points_per_voxel = gen(pc_th, empty_mean=True)
+    
+        from spconv.pytorch.utils import PointToVoxel
         voxel_generator = PointToVoxel(
             vsize_xyz=self.voxel_size,
             coors_range_xyz=self.point_cloud_range,
@@ -269,7 +325,6 @@ class SparseDataset(Dataset):
             device=points.device
         )        
         voxel_output = voxel_generator(points)
-
         voxels, coordinates, num_points = voxel_output
 
         # data_dict={}
@@ -278,7 +333,7 @@ class SparseDataset(Dataset):
         #     voxels = voxels[..., 3:]  # remove xyz in voxels(N, 3)
 
         # data_dict['points'] = points
-        return voxels.cpu(), coordinates.cpu(), num_points.cpu()
+        return voxels, coordinates, num_points
 
     def __len__(self):
         if self.train_mode == 'kframe':
@@ -291,6 +346,8 @@ class SparseDataset(Dataset):
             raise Exception('Invalid train_mode.')
 
     def __getitem__(self, idx):
+
+        device = torch.device('cuda:0')
        
         begin = time.time()
 
@@ -368,13 +425,13 @@ class SparseDataset(Dataset):
             pc_np_file1 = os.path.join(self.train_path,'remove_outlier', sequence, '%06d.bin' % (index_in_seq))
             # dtype=np.float32应与特征点保存的格式相同，否则会出现（如double）256个特征点变成128个乱码特征点的情况
             pc_np1 = np.fromfile(pc_np_file1, dtype=np.float32)
-            pc_np1 = pc_np1.reshape((-1, 4))
-            pc1 = torch.tensor(pc_np1, dtype=torch.float, device=torch.device('cuda:0'))
+            pc1 = pc_np1.reshape((-1, 4))
+            pc1 = torch.tensor(pc1, dtype=torch.float)
 
             pc_np_file2 = os.path.join(self.train_path,'remove_outlier', sequence, '%06d.bin' % (index_in_seq2))
             pc_np2 = np.fromfile(pc_np_file2, dtype=np.float32)
-            pc_np2 = pc_np2.reshape((-1, 4))
-            pc2 = torch.tensor(pc_np2, dtype=torch.float, device=torch.device('cuda:0'))
+            pc2 = pc_np2.reshape((-1, 4))
+            pc2 = torch.tensor(pc2, dtype=torch.float)
 
             pose1 = self.pose[sequence][index_in_seq]
             pose2 = self.pose[sequence][index_in_seq2]
@@ -391,8 +448,8 @@ class SparseDataset(Dataset):
                 kp_np2 = np.fromfile(kp_np_file2, dtype=np.float32)
                 kp2 = kp_np2.reshape((-1, 4))
 
-                kp1 = torch.tensor(kp1, dtype=torch.float, device=torch.device('cuda:0'))
-                kp2 = torch.tensor(kp2, dtype=torch.float, device=torch.device('cuda:0'))
+                kp1 = torch.tensor(kp1, dtype=torch.float, device=device)
+                kp2 = torch.tensor(kp2, dtype=torch.float, device=device)
             elif self.mode == 'test':
                 '''FPS the key point in real-time'''
                 cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
@@ -458,7 +515,7 @@ class SparseDataset(Dataset):
         readtime = time.time()
 
         '''Calculate Ground True Matches'''
-        ones = torch.ones(2048, device=torch.device('cuda:0'))
+        ones = torch.ones(2048, device=device)
         kp1h = torch.cat((kp1[:,:3], ones[:,None]), dim=1)
         kp2h = torch.cat((kp2[:,:3], ones[:,None]), dim=1)
 
@@ -482,9 +539,9 @@ class SparseDataset(Dataset):
             kp1 = np.array([(kp[0], kp[1], kp[2], 1) for kp in pc1]) # maybe coordinates pt has 3 dimentions; kp1_np.shape=(50,)
             kp2 = np.array([(kp[0], kp[1], kp[2], 1) for kp in pc2])
 
-        pose1 = torch.tensor(pose1, dtype=torch.float, device=torch.device('cuda:0'))
-        pose2 = torch.tensor(pose2, dtype=torch.float, device=torch.device('cuda:0'))
-        T_cam0_velo = torch.tensor(T_cam0_velo, dtype=torch.float, device=torch.device('cuda:0'))
+        pose1 = torch.tensor(pose1, dtype=torch.float, device=device)
+        pose2 = torch.tensor(pose2, dtype=torch.float, device=device)
+        T_cam0_velo = torch.tensor(T_cam0_velo, dtype=torch.float, device=device)
 
         # pose是cam0的轨迹真值，需将其转换到velodyne坐标系
         kp1w = torch.einsum('ki,ij,jm->mk', pose1, T_cam0_velo, kp1h.T)
@@ -553,8 +610,8 @@ class SparseDataset(Dataset):
                     [0,                     0,                      1, 0],
                     [0,0,0,1]
                     ])
-            R_z = torch.tensor(R_z, dtype=torch.float, device=torch.device('cuda:0'))
-            Rt_z = torch.tensor(Rt_z, dtype=torch.float, device=torch.device('cuda:0'))
+            R_z = torch.tensor(R_z, dtype=torch.float, device=device)
+            Rt_z = torch.tensor(Rt_z, dtype=torch.float, device=device)
             r_kp1 = torch.einsum('ki,ji->jk', R_z, kp1[:, :3])
             kp1 = torch.cat((r_kp1,kp1[:,3][:,None]), dim=1)
         else:
@@ -563,7 +620,7 @@ class SparseDataset(Dataset):
                             [0, 0,  1, 0],
                             [0, 0,  0,  1]
                             ])
-            Rt_z = torch.tensor(Rt_z, dtype=torch.float, device=torch.device('cuda:0'))
+            Rt_z = torch.tensor(Rt_z, dtype=torch.float, device=device)
 
 
         backendtime = time.time()
@@ -591,6 +648,7 @@ class SparseDataset(Dataset):
             # 'file_name': file_name
             'rep': rep,
             'Rt_z': Rt_z.cpu()
-        } 
+        }
+  
             
 

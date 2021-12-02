@@ -174,17 +174,17 @@ if __name__ == '__main__':
     if torch.cuda.is_available():
         # torch.cuda.set_device(opt.local_rank)
         device=torch.device('cuda:{}'.format(opt.local_rank[0]))
-        # if torch.cuda.device_count() > 1:
-        #     # os.environ['MASTER_ADDR'] = 'localhost'
-        #     # os.environ['MASTER_PORT'] = '12355'
-        #     print("Let's use", torch.cuda.device_count(), "GPUs!")
-        #     # dim = 0 [30, xxx] -> [10, ...], [10, ...], [10, ...] on 3 GPUs
-        #     # torch.distributed.init_process_group(backend="nccl", init_method='env://')
-        #     # net = torch.nn.DataParallel(net, device_ids=opt.local_rank)
-        #     fe_net = torch.nn.DataParallel(fe_net, device_ids=opt.local_rank)
-        # else:
-        #     # net = torch.nn.DataParallel(net)
-        #     fe_net = torch.nn.DataParallel(fe_net)
+        if torch.cuda.device_count() > 1:
+            # os.environ['MASTER_ADDR'] = 'localhost'
+            # os.environ['MASTER_PORT'] = '12355'
+            print("Let's use", torch.cuda.device_count(), "GPUs!")
+            # dim = 0 [30, xxx] -> [10, ...], [10, ...], [10, ...] on 3 GPUs
+            # torch.distributed.init_process_group(backend="nccl", init_method='env://')
+            # net = torch.nn.DataParallel(net, device_ids=opt.local_rank)
+            fe_net = torch.nn.DataParallel(fe_net, device_ids=opt.local_rank)
+        else:
+            # net = torch.nn.DataParallel(net)
+            fe_net = torch.nn.DataParallel(fe_net)
     else:
         device = torch.device("cpu")
         print("### CUDA not available ###")
@@ -209,8 +209,8 @@ if __name__ == '__main__':
     for epoch in range(start_epoch, opt.epoch+1):
         epoch_loss = 0
         current_loss = 0
-        net.double().train() # 保证BN层用每一批数据的均值和方差,并启用dropout随机取一部分网络连接来训练更新参数
-        fe_net.double().train()
+        net.train() # 保证BN层用每一批数据的均值和方差,并启用dropout随机取一部分网络连接来训练更新参数
+        fe_net.train()
         
         train_loader = tqdm(train_loader) # 使循环有进度条显示
         for i, pred in enumerate(train_loader):

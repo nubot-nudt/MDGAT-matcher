@@ -18,7 +18,10 @@ import os
 
 from utils import common_utils
 from functools import partial
-import spconv.pytorch as spconv
+import spconv
+
+import sparseconvnet as scn
+
 
 class VFETemplate(nn.Module):
     def __init__(self, model_cfg, **kwargs):
@@ -91,53 +94,55 @@ class VoxelBackBone8x(nn.Module):
     '''spconv version. Still exists bug.'''
     def __init__(self, model_cfg, input_channels, grid_size, **kwargs):
         super().__init__()
+        
+        
+        self.conv1 = scn.Sequential(
+            scn.SubmanifoldConvolution(3, 4, 16, 3, False),
+            scn.BatchNormReLU(16),
+            scn.SubmanifoldConvolution(3, 16, 16, 3, False),
+            scn.BatchNormReLU(16)
+        )
+
+        self.conv2 = scn.Sequential(
+            scn.Convolution(3, 16, 32, 3, 3, False),
+            scn.BatchNormReLU(32),
+            scn.SubmanifoldConvolution(3, 32, 32, 3, False),
+            scn.BatchNormReLU(32),
+            scn.SubmanifoldConvolution(3, 32, 32, 3, False),
+            scn.BatchNormReLU(32)
+        )
+
+        self.conv3 = scn.Sequential(
+            scn.Convolution(3, 32, 64, 3, 2, False),
+            scn.BatchNormReLU(64),
+            scn.SubmanifoldConvolution(3, 64, 64, 3, False),
+            scn.BatchNormReLU(64),
+            scn.SubmanifoldConvolution(3, 64, 64, 3, False),
+            scn.BatchNormReLU(64)
+        )
+
+        self.conv4 = scn.Sequential(
+            scn.Convolution(3, 64, 64, 3, 2, False),
+            scn.BatchNormReLU(64),
+            scn.SubmanifoldConvolution(3, 64, 64, 3, False),
+            scn.BatchNormReLU(64),
+            scn.SubmanifoldConvolution(3, 64, 64, 3, False),
+            scn.BatchNormReLU(64)
+        )
+
+        self.conv_out = scn.Sequential(
+            scn.Convolution(3, 64, 128, [3, 1, 1], [2,1,1], False),
+            scn.BatchNormReLU(128)
+        )
+
         self.model_cfg = model_cfg
-        norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
 
         self.sparse_shape = grid_size[::-1] + [1, 0, 0]
+        inputSpatialSize = self.conv1.input_spatial_size(torch.LongTensor(self.sparse_shape))
+        self.input_layer = scn.InputLayer(3, inputSpatialSize)
 
-        # SPCONV_DEBUG_SAVE_PATH = "/home/chenghao/DL_workspace/Localization/debug",
-        self.conv_input = spconv.SparseSequential(
-            spconv.SubMConv3d(input_channels, 16, 3, padding=1, bias=False, indice_key='subm1'),
-            norm_fn(16),
-            nn.ReLU(),
-        )
-        block = post_act_block
+    
 
-        self.conv1 = spconv.SparseSequential(
-            block(16, 16, 3, norm_fn=norm_fn, padding=1, indice_key='subm1'),
-        )
-
-        self.conv2 = spconv.SparseSequential(
-            # [1600, 1408, 41] <- [800, 704, 21]
-            block(16, 32, 3, norm_fn=norm_fn, stride=2, padding=1, indice_key='spconv2', conv_type='spconv'),
-            block(32, 32, 3, norm_fn=norm_fn, padding=1, indice_key='subm2'),
-            block(32, 32, 3, norm_fn=norm_fn, padding=1, indice_key='subm2'),
-        )
-
-        self.conv3 = spconv.SparseSequential(
-            # [800, 704, 21] <- [400, 352, 11]
-            block(32, 64, 3, norm_fn=norm_fn, stride=2, padding=1, indice_key='spconv3', conv_type='spconv'),
-            block(64, 64, 3, norm_fn=norm_fn, padding=1, indice_key='subm3'),
-            block(64, 64, 3, norm_fn=norm_fn, padding=1, indice_key='subm3'),
-        )
-
-        self.conv4 = spconv.SparseSequential(
-            # [400, 352, 11] <- [200, 176, 5]
-            block(64, 64, 3, norm_fn=norm_fn, stride=2, padding=(0, 1, 1), indice_key='spconv4', conv_type='spconv'),
-            block(64, 64, 3, norm_fn=norm_fn, padding=1, indice_key='subm4'),
-            block(64, 64, 3, norm_fn=norm_fn, padding=1, indice_key='subm4'),
-        )
-
-        last_pad = 0
-        last_pad = self.model_cfg.get('last_pad', last_pad)
-        self.conv_out = spconv.SparseSequential(
-            # [200, 150, 5] -> [200, 150, 2]
-            spconv.SparseConv3d(64, 128, (3, 1, 1), stride=(2, 1, 1), padding=last_pad,
-                                bias=False, indice_key='spconv_down2'),
-            norm_fn(128),
-            nn.ReLU(),
-        )
         self.num_point_features = 128
         self.backbone_channels = {
             'x_conv1': 16,
@@ -157,12 +162,6 @@ class VoxelBackBone8x(nn.Module):
             batch_dict:
                 encoded_spconv_tensor: sparse tensor
         """
-        voxel_features, voxel_coords = batch_dict['voxel_features'], batch_dict['voxel_coords']
-        # Z,Y,X = self.sparse_shape
-        # B,N,D = voxel_features.size()
-
-        # voxels = torch.zeros([B,Z,Y,X,D], device = voxel_features.device)
-        # voxel[:,:]
 
         for key, val in batch_dict.items():
             if key in ['voxels', 'voxel_num_points', 'voxel_features']:
@@ -183,16 +182,10 @@ class VoxelBackBone8x(nn.Module):
                     coors.append(coor_pad)
                 batch_dict[key] = torch.cat(coors,dim=0)
 
-        input_sp_tensor = spconv.SparseConvTensor(
-            features=batch_dict['voxel_features'],
-            indices=batch_dict['voxel_coords'].int(),
-            spatial_shape=self.sparse_shape,
-            batch_size=batch_dict['batch_size']
-        )
-
-        x = self.conv_input(input_sp_tensor)
-
-        x_conv1 = self.conv1(x)
+        
+        
+        input = self.input_layer([batch_dict['voxel_coords'], batch_dict['voxel_features']])
+        x_conv1 = self.conv1(input)
         x_conv2 = self.conv2(x_conv1)
         x_conv3 = self.conv3(x_conv2)
         x_conv4 = self.conv4(x_conv3)
