@@ -43,7 +43,7 @@ class StackSAModuleMSG(nn.Module):
             self.mlps.append(nn.Sequential(*shared_mlps))
         self.pool_method = pool_method
 
-        self.init_weights()
+        # self.init_weights()
 
     def init_weights(self):
         for m in self.modules():
@@ -88,6 +88,9 @@ class StackSAModuleMSG(nn.Module):
             new_features_list.append(new_features)
 
         new_features = torch.cat(new_features_list, dim=1)  # (M1 + M2 ..., C)
+
+        if torch.isnan(new_features).sum()>0:
+            print('pause')
 
         return new_xyz, new_features
 

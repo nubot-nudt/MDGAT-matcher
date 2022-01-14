@@ -54,7 +54,8 @@ class SparseDataset(Dataset):
 
 
     def __len__(self):
-        return len(self.dataset)
+        return 1
+        # return len(self.dataset)
 
     def load_kitti_gt_txt(self, txt_root, seq):
         '''
@@ -99,7 +100,9 @@ class SparseDataset(Dataset):
 
     def make_dataset_kitti_distance(self, txt_path):
 
-            seq_list = list(range(11))
+            # seq_list = list(range(11))
+            seq_list = list([10])
+
 
             dataset = []
             for seq in seq_list:
@@ -114,17 +117,25 @@ class SparseDataset(Dataset):
         # idx = 216
         index_in_seq = self.dataset[idx]['anc_idx']
         index_in_seq2 = self.dataset[idx]['pos_idx']
+        index_in_seq=0
+        index_in_seq2=0
         seq = self.dataset[idx]['seq']
 
         sequence = '%02d'%seq
 
-        pc_np_file1 = os.path.join(self.train_path,'remove_outlier', sequence, '%06d.bin' % (index_in_seq))
+        if self.save_remove_outlier_file:
+            pc_np_file1 = os.path.join(self.train_path,'sequences', sequence, 'velodyne/%06d.bin' % (index_in_seq))
+            pc_np_file2 = os.path.join(self.train_path,'sequences', sequence, 'velodyne/%06d.bin' % (index_in_seq2))
+        else:
+            pc_np_file1 = os.path.join(self.train_path,'remove_outlier', sequence, '%06d.bin' % (index_in_seq))
+            pc_np_file2 = os.path.join(self.train_path,'remove_outlier', sequence, '%06d.bin' % (index_in_seq2))
+
+
         # dtype=np.float32应与特征点保存的格式相同，否则会出现（如double）256个特征点变成128个乱码特征点的情况
         pc_np1 = np.fromfile(pc_np_file1, dtype=np.float32)
         pc_np1 = pc_np1.reshape((-1, 4))
         pc1 = torch.tensor(pc_np1, dtype=torch.float, device=torch.device('cuda:0'))
 
-        pc_np_file2 = os.path.join(self.train_path,'remove_outlier', sequence, '%06d.bin' % (index_in_seq2))
         pc_np2 = np.fromfile(pc_np_file2, dtype=np.float32)
         pc_np2 = pc_np2.reshape((-1, 4))
         pc2 = torch.tensor(pc_np2, dtype=torch.float, device=torch.device('cuda:0'))
@@ -133,7 +144,7 @@ class SparseDataset(Dataset):
             pc1 = pc1[(pc1[:,2]>-3)]
             pc2 = pc2[(pc2[:,2]>-3)]
             if self.save_remove_outlier_file:
-                remove_outlier_path = '/home/chenghao/Mount/Dataset/KITTI_odometry/remove_outlier/velodyne/{}'.format(sequence)
+                remove_outlier_path = '/home/chenghao/Mount/Dataset/KITTI_odometry/remove_outlier/{}'.format(sequence)
                 if not os.path.exists(remove_outlier_path):
                     os.makedirs(remove_outlier_path)
                 remove_outlier = '{}/{:0>6d}.bin'.format(remove_outlier_path,index_in_seq)
@@ -142,6 +153,8 @@ class SparseDataset(Dataset):
                     pc1.cpu().numpy().astype(np.float32).tofile(remove_outlier)
                 if not os.path.exists(remove_outlier2):
                     pc2.cpu().numpy().astype(np.float32).tofile(remove_outlier2)
+                
+                return
 
         
         '''pre-extract the key points and save to files'''
@@ -207,11 +220,11 @@ parser.add_argument(
     help='Path to the directory of pairs.')
 
 parser.add_argument(
-    '--remove_outlier', type=bool, default=False, 
+    '--remove_outlier', type=bool, default=True, 
     help='')
 
 parser.add_argument(
-    '--save_remove_outlier_file', type=bool, default=False, 
+    '--save_remove_outlier_file', type=bool, default=True, 
     help='')
 
 if __name__ == '__main__':

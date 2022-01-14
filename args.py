@@ -60,11 +60,12 @@ def parse_config():
         help='If memory is enough, load all the data')
             
     parser.add_argument(
-        '--batch_size', type=int, default=8, #12
+        '--batch_size', type=int, default=16, #12
         help='Batch size')
 
     parser.add_argument(
-        '--local_rank', type=int, default=[0,1,2,3], 
+        # '--local_rank', type=int, default=-1, 
+        '--local_rank', type=int, default=[0], 
         help='Used gpu label')
 
     parser.add_argument(
@@ -76,6 +77,17 @@ def parse_config():
         '--resume_model', type=str, default=
         '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_118(val_loss0.3962240707615172).pth',
         help='Path to model to be Resumed')
+    
+    parser.add_argument(
+        # '--resume_model', type=str, default='/media/chenghao/本地磁盘/sch_ws/gnn/checkpoint/raw9-kNone-superglue-FPFH_only/nomutualcheck-raw-kNone-batch64-distance-superglue-FPFH_only-USIP/best_model_epoch_216(test_loss1.4080408022386168).pth')
+        '--random_sample_num', type=int, default=16384,
+        help='Random sample number')
+    
+    parser.add_argument('--tcp_port', type=int, default=18888, help='tcp port for distrbuted training')
+
+    parser.add_argument(
+        '--dist_train', type=bool, default=True, 
+        help='if True use command"UDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --nproc_per_node=4 train.py"')
 
 
 
@@ -96,7 +108,7 @@ def parse_config():
 
 
 
-    '''Model'''
+    '''feature aggregation net'''
     parser.add_argument(
         '--sinkhorn_iterations', type=int, default=20,
         help='Number of Sinkhorn iterations performed by SuperGlue')
@@ -151,8 +163,12 @@ def parse_config():
     parser.add_argument(
         '--triplet_loss_gamma', type=float, default=0.5,  
         help='Threshold for triplet loss and gap loss')
-
-
+    
+    
+    '''feature extraction net'''
+    parser.add_argument(
+        '--fe', type=int, default=20,
+        help='Number of Sinkhorn iterations performed by SuperGlue')
 
 
     
@@ -163,7 +179,11 @@ def parse_config():
 
     parser.add_argument(
         '--train_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry', 
-        help='Path to the directory of training imgs.')
+        help='Path to the directory of training pcs.')
+    
+    parser.add_argument(
+        '--points_path', type=str, default='kitti_randomsample_16384_n8', 
+        help='remove_outlier; kitti_randomsample_16384_n8')
 
     parser.add_argument(
         '--keypoints_path', type=str, default='/home/chenghao/Mount/Dataset/KITTI_odometry/keypoints_USIP/tsf_256_FPFH_16384-512-k1k16-2d-nonoise',

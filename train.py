@@ -1,24 +1,23 @@
 from pathlib import Path
-import argparse
-import random
-import numpy as np
-import matplotlib.cm as cm
 import torch
-import torch.nn as nn
 from torch.autograd import Variable
-
 import os
-import torch.multiprocessing
 from tqdm import tqdm
 import time
-
-import open3d as o3d
-import pykitti
-# visualize
-import torchvision
-from torchvision import transforms
 # from logger import Logger
 from tensorboardX import SummaryWriter
+
+import torch.multiprocessing as mp
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+import torch.backends.cudnn as cudnn
+
+from apex import amp
+from apex.parallel import DistributedDataParallel
+
+from args import parse_config
+from utils.load_data import SparseDataset
 
 from models.fa.superglue import SuperGlue
 from models.fa.r_mdgat import r_MDGAT
@@ -28,101 +27,87 @@ from models.fa.r_mdgat4 import r_MDGAT4
 from models.fa.mdgat import MDGAT
 
 from models.fe.FeatureExtractor import FeatureExtractor
+from models.fe.test import test
 
 torch.set_grad_enabled(True)
-torch.multiprocessing.set_sharing_strategy('file_system')
+
+# def init_dist_pytorch(local_rank, backend='nccl'):
+#     if mp.get_start_method(allow_none=True) is None:
+#         mp.set_start_method('spawn')
+
+#     num_gpus = torch.cuda.device_count()
+#     torch.cuda.set_device(local_rank % num_gpus)
+#     os.environ['MASTER_ADDR'] = 'localhost'
+#     os.environ['MASTER_PORT'] = '12355'
+#     dist.init_process_group(
+#         backend=backend,
+#         # init_method='tcp://127.0.0.1:%d' % tcp_port,
+#         # 10.1.0.111
+#         rank=local_rank,
+#         world_size=num_gpus
+#     )
+#     rank = dist.get_rank()
+#     return num_gpus, rank
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self, name, fmt=':f'):
+        self.name = name
+        self.fmt = fmt
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+    def __str__(self):
+        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        return fmtstr.format(**self.__dict__)
 
 
-# parser = argparse.ArgumentParser(
-#     description=' ',
-#     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-# parser.add_argument(
-#     '--learning_rate', type=int, default=0.0001,  #0.0001
-#     help='Learning rate')
+class ProgressMeter(object):
+    def __init__(self, num_batches, meters, prefix=""):
+        self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
+        self.meters = meters
+        self.prefix = prefix
 
-# parser.add_argument(
-#     '--epoch', type=int, default=1000,
-#     help='Number of epoches')
+    def display(self, batch):
+        entries = [self.prefix + self.batch_fmtstr.format(batch)]
+        entries += [str(meter) for meter in self.meters]
+        print('\t'.join(entries))
 
-# parser.add_argument(
-#     '--rotation_augment', type=bool, default=True,
-#     help='perform random rotation on input')
+    def _get_batch_fmtstr(self, num_batches):
+        num_digits = len(str(num_batches // 1))
+        fmt = '{:' + str(num_digits) + 'd}'
+        return '[' + fmt + '/' + fmt.format(num_batches) + ']'
 
-# parser.add_argument(
-#     '--train_mode', type=str, default='distance', 
-#     help='Select train frame by: "kframe", "distance" or "overlap".')
+def reduce_mean(tensor, nprocs):
+    rt = tensor.clone()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    rt /= nprocs
+    return rt
 
-# parser.add_argument(
-#     '--memory_is_enough', type=bool, default=False, 
-#     help='If memory is enough, load all the data')
-        
-# parser.add_argument(
-#     '--batch_size', type=int, default=2, #12
-#     help='Batch size')
+def setup(rank, nprocs):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12345'
 
-# parser.add_argument(
-#     '--local_rank', type=int, default=[0,1,2,3], 
-#     help='Used gpu label')
+    # initialize the process group
+    # torch.cuda.set_device(rank % world_size)
 
-# parser.add_argument(
-#     '--resume', type=bool, default=False, # True False
-#     help='Resuming from existing model')
+    dist.init_process_group("nccl", rank=rank, world_size=nprocs)
 
-# parser.add_argument(
-#     # '--resume_model', type=str, default='/media/chenghao/本地磁盘/sch_ws/gnn/checkpoint/raw9-kNone-superglue-FPFH_only/nomutualcheck-raw-kNone-batch64-distance-superglue-FPFH_only-USIP/best_model_epoch_216(test_loss1.4080408022386168).pth')
-#     '--resume_model', type=str, default=
-#     '/home/chenghao/Mount/sch_ws/gnn/checkpoint/kitti/RotationAug/rotatary_mdgat-distribution_loss-FPFH/nomutualcheck-rotatary_mdgat-batch32-distance-distribution_loss-FPFH-USIP/best_model_epoch_118(val_loss0.3962240707615172).pth',
-#     help='Path to model to be Resumed')
+def cleanup():
+    dist.destroy_process_group()
 
-
-
-from args import parse_config
-
-if __name__ == '__main__':
-
-    torch.multiprocessing.set_start_method('spawn')
-
-    opt, cfgs = parse_config()
-    # opt = parser.parse_args()
-    
-    from utils.load_data import SparseDataset
-
-    
-    if opt.net == 'raw':
-        opt.k = None
-        opt.l = 9
-    if opt.mutual_check:
-        model_name = '{}-batch{}-{}-{}-{}-{}' .format(opt.net, opt.batch_size, opt.train_mode, opt.loss_method, opt.descriptor, opt.keypoints)
-    else:
-        model_name = 'nomutualcheck-{}-batch{}-{}-{}-{}-{}' .format(opt.net, opt.batch_size, opt.train_mode, opt.loss_method, opt.descriptor, opt.keypoints)
-
-    # 创建模型输出路径
-    if opt.rotation_augment ==True:
-        model_out_path = '{}/{}/RotationAug/{}-{}-{}/{}'.format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor, opt.k)
-    else:
-        model_out_path = '{}/{}/{}-{}-{}/{}' .format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor, opt.k)
-
-    log_path = '{}/{}/logs'.format(model_out_path,model_name)
-    log_path = Path(log_path)
-    log_path.mkdir(exist_ok=True, parents=True)
-    logger = SummaryWriter(log_path)
-
-    model_out_path = '{}/{}' .format(model_out_path, model_name)
-    model_out_path = Path(model_out_path)
-    model_out_path.mkdir(exist_ok=True, parents=True)
-
-    print("Train",opt.net,"net with \nStructure k:",opt.k,"\nDescriptor: ",opt.descriptor,"\nLoss: ",opt.loss_method,"\nin Dataset: ",opt.dataset,
-    "\n========================================",
-    "\nmodel_out_path: ", model_out_path)
-
-
-    train_set = SparseDataset(opt, 'train', cfgs.DATA_CONFIG)
-    val_set = SparseDataset(opt, 'val', cfgs.DATA_CONFIG)
-
-    val_loader = torch.utils.data.DataLoader(dataset=val_set, shuffle=False, batch_size=opt.batch_size, num_workers=1, drop_last=True, pin_memory = True)
-    train_loader = torch.utils.data.DataLoader(dataset=train_set, shuffle=False, batch_size=opt.batch_size, num_workers=1, drop_last=True, pin_memory = True)
-    
-   
+def setup_fanet(opt):
     if opt.resume:        
         path_checkpoint = opt.resume_model  # 断点路径
         checkpoint = torch.load(path_checkpoint)  # 加载断点
@@ -137,10 +122,6 @@ if __name__ == '__main__':
         best_epoch = None
         lr=opt.learning_rate
 
-
-    fe_net = FeatureExtractor(cfgs.MODEL, train_set)
-    
-    
     config = {
             'net': {
                 'sinkhorn_iterations': opt.sinkhorn_iterations,
@@ -169,28 +150,8 @@ if __name__ == '__main__':
         net = r_MDGAT3(config.get('net', {}))
     elif opt.net == 'rotatary_mdgat4':
         net = r_MDGAT4(config.get('net', {}))
-    
-    # 参数传入device
-    if torch.cuda.is_available():
-        # torch.cuda.set_device(opt.local_rank)
-        device=torch.device('cuda:{}'.format(opt.local_rank[0]))
-        if torch.cuda.device_count() > 1:
-            # os.environ['MASTER_ADDR'] = 'localhost'
-            # os.environ['MASTER_PORT'] = '12355'
-            print("Let's use", torch.cuda.device_count(), "GPUs!")
-            # dim = 0 [30, xxx] -> [10, ...], [10, ...], [10, ...] on 3 GPUs
-            # torch.distributed.init_process_group(backend="nccl", init_method='env://')
-            # net = torch.nn.DataParallel(net, device_ids=opt.local_rank)
-            fe_net = torch.nn.DataParallel(fe_net, device_ids=opt.local_rank)
-        else:
-            # net = torch.nn.DataParallel(net)
-            fe_net = torch.nn.DataParallel(fe_net)
-    else:
-        device = torch.device("cpu")
-        print("### CUDA not available ###")
-    fe_net.to(device)
-    # net.to(device)
 
+    
     # 加载模型参数
     if opt.resume:
         net.load_state_dict(checkpoint['net']) # 加载模型可学习参数
@@ -202,107 +163,247 @@ if __name__ == '__main__':
     else:
         optimizer = torch.optim.Adam(net.parameters(), lr=lr)
         print('========================================\nStart new training')
-
-
     
+def config(opt):
+    if opt.net == 'raw':
+        opt.k = None
+        opt.l = 9
+    if opt.mutual_check:
+        model_name = '{}-batch{}-{}-{}-{}-{}' .format(opt.net, opt.batch_size, opt.train_mode, opt.loss_method, opt.descriptor, opt.keypoints)
+    else:
+        model_name = 'nomutualcheck-{}-batch{}-{}-{}-{}-{}' .format(opt.net, opt.batch_size, opt.train_mode, opt.loss_method, opt.descriptor, opt.keypoints)
+
+    # 创建模型输出路径
+    if opt.rotation_augment ==True:
+        model_out_path = '{}/{}/RotationAug/{}-{}-{}/{}'.format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor, opt.k)
+    else:
+        model_out_path = '{}/{}/{}-{}-{}/{}' .format(opt.model_out_path, opt.dataset, opt.net, opt.loss_method, opt.descriptor, opt.k)
+
+    log_path = '{}/{}/logs'.format(model_out_path,model_name)
+    log_path = Path(log_path)
+    log_path.mkdir(exist_ok=True, parents=True)
+    logger = SummaryWriter(log_path)
+
+    model_out_path = '{}/{}' .format(model_out_path, model_name)
+    model_out_path = Path(model_out_path)
+    model_out_path.mkdir(exist_ok=True, parents=True)
+
+    return model_out_path, logger
+
+def load_dta_to_cuda(pred, local_rank):
+    for k in pred:
+        if k!='idx0' and k!='idx1' and k!='sequence' and k!='match0' and k!='match1':
+            if type(pred[k]) == torch.Tensor:
+                pred[k] = pred[k].cuda(local_rank)
+            else:
+                pred[k] = torch.from_numpy(pred[k]).float().cuda(local_rank)
+    return pred
+
+def train(train_loader, net, optimizer, epoch, local_rank,
+              opt):
+    # batch_time = AverageMeter('Time', ':6.3f')
+    # data_time = AverageMeter('Data', ':6.3f')
+    # losses = AverageMeter('Loss', ':.4e')
+
+    # progress = ProgressMeter(len(train_loader),
+    #                          [batch_time, data_time, losses],
+    #                          prefix="Epoch: [{}]".format(epoch))
+
+    epoch_loss = []
+    rep_all = []
+    
+    # 加载模型参数
+    if opt.resume:
+        path_checkpoint = opt.resume_model
+        map_location = {'cuda:%d' % 0: 'cuda:%d' % local_rank}
+        net.load_state_dict(
+            torch.load(path_checkpoint, map_location=map_location))
+        print('Resume from:', opt.resume_model, 'at epoch', opt.start_epoch-1, ',loss', opt.loss, ',lr', opt.lr,'.\nSo far best loss',opt.best_loss,
+        "\n========================================")
+    else:
+        print('========================================\nStart new training')
+    
+    net.train()
+    train_loader = tqdm(train_loader) # 使循环有进度条显示
+    end = time.time()
+    for i, pred in enumerate(train_loader):
+        pred = load_dta_to_cuda(pred, local_rank)
+        # data_time.update(time.time() - end)
+       
+        data = net(pred)
+        loss = data['loss']
+
+        # dist.barrier()
+
+        # reduced_loss = reduce_mean(loss, opt.nprocs)
+        # losses.update(reduced_loss.item())
+
+        optimizer.zero_grad()
+        if opt.dist_train:
+            '''DDP'''
+            # reduced_loss.backward()
+            # loss.backward()
+            '''APEX'''
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
+
+        # if torch.isnan(net.pfe.SA_rawpoints.mlps[0][0].weight[0]).sum()>0:
+        #     print('pause')
+        print(optimizer.param_groups[0]['params'][0].grad)
+
+        optimizer.step()
+
+        # batch_time.update(time.time() - end)
+        end = time.time()
+
+        # if i % 10 == 0:
+        #     progress.display(i)
+        print(loss)
+        if torch.isnan(loss):
+            print('pause')
+        
+        # if torch.isnan(net.pfe.SA_rawpoints.mlps[0][0].weight[0]).sum()>0:
+        #     print('pause')
+
+        if torch.isnan(net.module.pfe.mlps[0].weight[0]).sum()>0:
+            print('pause')
+
+        epoch_loss.append(loss)
+        # 删除变量释放显存
+        # del pred, data, i
+    return epoch_loss
+
+def validate(val_loader, net, local_rank, opt):
+    '''
+        model.eval():   will notify all your layers that you are in eval mode, 
+                        that way, batchnorm or dropout layers will work in eval 
+                        mode instead of training mode.
+        torch.no_grad():impacts the autograd engine and deactivate it. It will 
+                        reduce memory usage and speed up computations but you 
+                        won’t be able to backprop (which you don’t want in an eval script).
+    '''
+    net.eval()
+    with torch.no_grad():
+        mean_val_loss = []
+        val_loader = tqdm(val_loader) # 使循环有进度条显示
+        for i, pred in enumerate(val_loader):
+            pred = load_dta_to_cuda(pred, local_rank)
+            
+            
+            data = net(pred) # 匹配结果
+            pred = {**pred, **data}
+            loss = data['loss']
+
+            # dist.barrier()
+
+            # reduced_loss = reduce_mean(loss, opt.nprocs)
+
+            mean_val_loss.append(loss)
+    
+    return mean_val_loss
+    
+    
+
+def main_worker(local_rank, opt, cfgs):
+
+    model_out_path, logger = config(opt)
+    
+    if local_rank==0:
+        print("Train",opt.net,"net with \nStructure k:",opt.k,"\nDescriptor: ",opt.descriptor,"\nLoss: ",opt.loss_method,"\nin Dataset: ",opt.dataset,
+        "\n========================================",
+        "\nmodel_out_path: ", model_out_path)
+
+    if opt.resume:        
+        path_checkpoint = opt.resume_model  # 断点路径
+        checkpoint = torch.load(path_checkpoint)  # 加载断点
+        opt.lr = checkpoint['lr_schedule']  # lr = opt.learning_rate # lr = checkpoint['lr_schedule']
+        opt.start_epoch = checkpoint['epoch'] + 1   # 设置开始的epoch  # start_epoch = 1 # start_epoch = checkpoint['epoch'] + 1 
+        opt.best_epoch = opt.start_epoch
+        opt.loss = checkpoint['loss']
+        opt.best_loss = 0.427
+    else:
+        start_epoch = 1
+        best_loss = 1e6
+        best_epoch = None
+        lr=opt.learning_rate
+    opt.local_rank = local_rank
+
+    if opt.dist_train:
+        setup(local_rank, opt.nprocs)
+        torch.cuda.set_device(local_rank)
+    
+        # When using a single GPU per process and per
+        # DistributedDataParallel, we need to divide the batch size
+        # ourselves based on the total number of GPUs we have
+        opt.batch_size = int(opt.batch_size/opt.nprocs)
+
+        train_set = SparseDataset(opt, 'train', cfgs.DATA_CONFIG)
+        val_set = SparseDataset(opt, 'val', cfgs.DATA_CONFIG)
+        # train_sampler = DistributedSampler(train_set, num_replicas=dist.get_world_size(), rank=opt.local_rank)
+        train_sampler = DistributedSampler(train_set)
+        val_sampler = DistributedSampler(val_set)
+        train_loader = torch.utils.data.DataLoader(dataset=train_set, shuffle=False, batch_size=opt.batch_size, num_workers=10, drop_last=True, pin_memory = True, sampler = train_sampler)
+        val_loader = torch.utils.data.DataLoader(dataset=val_set, shuffle=False, batch_size=opt.batch_size, num_workers=10, drop_last=True, pin_memory = True, sampler = val_sampler)
+
+        # fenet = FeatureExtractor(cfgs.MODEL, train_set).cuda(local_rank)
+        fenet = test(cfgs.MODEL, train_set).cuda(local_rank)
+    else:
+        train_set = SparseDataset(opt, 'train', cfgs.DATA_CONFIG)
+        val_set = SparseDataset(opt, 'val', cfgs.DATA_CONFIG)
+        train_loader = torch.utils.data.DataLoader(dataset=train_set, shuffle=False, batch_size=opt.batch_size, num_workers=10, drop_last=True, pin_memory = True)
+        val_loader = torch.utils.data.DataLoader(dataset=val_set, shuffle=False, batch_size=opt.batch_size, num_workers=10, drop_last=True, pin_memory = True)
+
+        # fenet = FeatureExtractor(cfgs.MODEL, train_set).cuda(local_rank)
+        fenet = test(cfgs.MODEL, train_set).cuda(local_rank)
+
+
+    if opt.dist_train == True:
+        '''DDP'''
+        # ddp_fenet = DDP(fenet, device_ids=[local_rank])
+        # optimizer = torch.optim.Adam(ddp_fenet.parameters(), lr=lr)
+        '''APEX'''
+        fenet = DistributedDataParallel(fenet)
+        optimizer = torch.optim.Adam(fenet.parameters(), lr=lr)
+        fenet, optimizer = amp.initialize(fenet, optimizer) #, opt_level='O0'
+        
+    else:
+        optimizer = torch.optim.Adam(fenet.parameters(), lr=lr)
+        
+
+    cudnn.benchmark = True
+
     mean_loss = []
     for epoch in range(start_epoch, opt.epoch+1):
-        epoch_loss = 0
-        current_loss = 0
-        net.train() # 保证BN层用每一批数据的均值和方差,并启用dropout随机取一部分网络连接来训练更新参数
-        fe_net.train()
-        
-        train_loader = tqdm(train_loader) # 使循环有进度条显示
-        for i, pred in enumerate(train_loader):
-            # 将数据传入cuda            # print(type(pred))   #dict
-            # print(pred)
-            for k in pred:
-                # if k != 'file_name' and k!='cloud0' and k!='cloud1':
-                if k!='idx0' and k!='idx1' and k!='sequence':
-                    if type(pred[k]) == torch.Tensor:
-                        # pred[k] = Variable(pred[k].cuda())
-                        pred[k] = Variable(pred[k].to(device))
-                    else:
-                        # pred[k] = Variable(torch.stack(pred[k]).cuda())
-                        pred[k] = Variable(torch.stack(pred[k]).to(device))
-                    # print(type(pred[k]))   #pytorch.tensor
-            
-            data = fe_net(pred)
-            # data = net(data) 
-         
+        if opt.dist_train:
+            train_sampler.set_epoch(epoch)
+            val_sampler.set_epoch(epoch)
 
-            
+        epoch_loss = train(train_loader, fenet, optimizer, epoch, local_rank,
+              opt)
 
-            # # 去除头字符，将匹配结果和源数据拼接
-            # for k, v in pred.items(): # pred.items() 返回可遍历的元组数组
-            #     # print(type(k)) #str 头字符
-            #     # print(type(v)) #头对应的tensor
-            #     pred[k] = v[0]
-            # pred = {**pred, **data}
-
-            # if 'skip_train' in pred: # has no keypoint
-            #     continue
-
-            # # net.zero_grad() # 清空梯度
-            # optimizer.zero_grad()
-            # Loss = pred['loss']
-            # Loss = torch.mean(Loss)
-            # epoch_loss += Loss.item()
-            # # mean_loss.append(Loss) # every 10 pairs
-            # # batch_loss.append(Loss) # every 10 pairs
-            # Loss.backward()
-            # optimizer.step()
-            # # lr_schedule.step()
-
-            # # 删除变量释放显存
-            # del Loss, pred, data, i
-
-        # validation
-        '''
-            model.eval():   will notify all your layers that you are in eval mode, 
-                            that way, batchnorm or dropout layers will work in eval 
-                            mode instead of training mode.
-            torch.no_grad():impacts the autograd engine and deactivate it. It will 
-                            reduce memory usage and speed up computations but you 
-                            won’t be able to backprop (which you don’t want in an eval script).
-        '''
         begin = time.time()
-        with torch.no_grad():
-            if epoch >= 0 and epoch%1==0:
-                mean_val_loss = []
-                for i, pred in enumerate(val_loader):
-                    ### eval ###
-                    # evaluate loss.
-                    net.eval()                
-                    for k in pred:
-                        # if k != 'file_name' and k!='cloud0' and k!='cloud1':
-                        if k!='idx0' and k!='idx1' and k!='sequence':
-                            if type(pred[k]) == torch.Tensor:
-                                pred[k] = Variable(pred[k].cuda().detach())
-                            else:
-                                pred[k] = Variable(torch.stack(pred[k]).cuda().detach())
-                            # print(type(pred[k]))   #pytorch.tensor
-                    
-                    data = net(pred) # 匹配结果
-                    pred = {**pred, **data}
+        mean_val_loss = validate(val_loader, fenet, local_rank, opt)
+        timeconsume = time.time() - begin
 
-                    Loss = pred['loss']
-                    mean_val_loss.append(Loss) 
-         
-            timeconsume = time.time() - begin
-            # 保存eval中loss最小的网络W
-            mean_val_loss = torch.mean(torch.stack(mean_val_loss)).item()
-            epoch_loss /= len(train_loader)
+        # 保存eval中loss最小的网络W
+        mean_val_loss = torch.mean(torch.stack(mean_val_loss)).item()
+        epoch_loss = torch.mean(torch.stack(epoch_loss)).item()
 
-            print('Epoch [{}/{}] done, validation loss: {:.4f}, former best val loss: {:.4f} at epoch {}, epoch_loss: {:.4f}' 
-            .format(epoch, opt.epoch, mean_val_loss, best_loss, best_epoch, epoch_loss))
-            checkpoint = {
-                    "net": net.state_dict(),
-                    'optimizer':optimizer.state_dict(),
-                    "epoch": epoch,
-                    'lr_schedule': optimizer.state_dict()['param_groups'][0]['lr'],
-                    'loss': mean_val_loss
-                }
+        print('Epoch [{}/{}] done, validation loss: {:.4f}, former best val loss: {:.4f} at epoch {}, epoch_loss: {:.4f}' 
+        .format(epoch, opt.epoch, mean_val_loss, best_loss, best_epoch, epoch_loss))
+        checkpoint = {
+                "net": fenet.state_dict(),
+                'optimizer':optimizer.state_dict(),
+                "epoch": epoch,
+                'lr_schedule': optimizer.state_dict()['param_groups'][0]['lr'],
+                'loss': mean_val_loss
+            }
+        if local_rank == 0:
+            # All processes should see same parameters as they all start from same
+            # random parameters and gradients are synchronized in backward passes.
+            # Therefore, saving it in one process is sufficient.
             if (mean_val_loss <= best_loss + 1e-5): 
                 best_loss = mean_val_loss
                 best_epoch = epoch
@@ -315,15 +416,47 @@ if __name__ == '__main__':
                 # print("Epoch [{}/{}] done. Epoch Loss {:.4f}. Checkpoint saved to {}"
                 #     .format(epoch, opt.epoch, epoch_loss, model_out_fullpath))
 
-            # ================================================================== #
-            #                        Tensorboard Logging                         #
-            # ================================================================== #
-            logger.add_scalar('Train/val_loss',mean_val_loss,epoch)
-            logger.add_scalar('Train/epoch_loss',epoch_loss,epoch)
-            # print("log file saved to {}\n"
-            #     .format(log_path))
+        # ================================================================== #
+        #                        Tensorboard Logging                         #
+        # ================================================================== #
+        logger.add_scalar('Train/val_loss',mean_val_loss,epoch)
+        logger.add_scalar('Train/epoch_loss',epoch_loss,epoch)
+        # print("log file saved to {}\n"
+        #     .format(log_path))
 
-        if opt.loss_method == 'distribution_loss6':
-            indicator = 95
-            if epoch > indicator:
-                net.module.update_lamda(epoch, indicator)
+        # if opt.loss_method == 'distribution_loss6':
+        #     indicator = 95
+        #     if epoch > indicator:
+        #         net.module.update_lamda(epoch, indicator)
+
+
+
+if __name__ == '__main__':
+
+    opt, cfgs = parse_config()
+    # opt = parser.parse_args()
+
+    opt.nprocs = torch.cuda.device_count()
+    print(opt.nprocs)
+
+    if opt.dist_train:
+        '''torch.multiprocessing.spawn: directly run the script'''
+        mp.spawn(main_worker,
+            args=(opt, cfgs),
+            nprocs=4
+            )
+        '''torch.distributed.launch: use command
+        UDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --nproc_per_node=4 train.py
+        '''
+        # main_worker(opt.local_rank, opt, cfgs)
+    else:
+        mp.set_start_method('spawn')
+        opt.local_rank = 0
+        main_worker(opt.local_rank, opt, cfgs)
+
+    
+
+
+
+    
+    

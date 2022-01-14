@@ -21,27 +21,7 @@ from functools import partial
 import spconv
 
 import sparseconvnet as scn
-
-
-class VFETemplate(nn.Module):
-    def __init__(self, model_cfg, **kwargs):
-        super().__init__()
-        self.model_cfg = model_cfg
-
-    def get_output_feature_dim(self):
-        raise NotImplementedError
-
-    def forward(self, **kwargs):
-        """
-        Args:
-            **kwargs:
-
-        Returns:
-            batch_dict:
-                ...
-                vfe_features: (num_voxels, C)
-        """
-        raise NotImplementedError
+import torch.nn.functional as F
 
 class MeanVFE(nn.Module):
     def __init__(self):
@@ -62,34 +42,13 @@ class MeanVFE(nn.Module):
             vfe_features: (num_voxels, C)
         """
         voxel_features, voxel_num_points = batch_dict['voxels'], batch_dict['voxel_num_points']
-        points_mean = voxel_features[:, :, :, :].sum(dim=2, keepdim=False)
-        normalizer = torch.clamp_min(voxel_num_points[:,:,None], min=1.0).type_as(voxel_features)
+        points_mean = voxel_features[:, :, :].sum(dim=1, keepdim=False)
+        normalizer = torch.clamp_min(voxel_num_points[:,None], min=1.0).type_as(voxel_features)
         points_mean = points_mean / normalizer
         batch_dict['voxel_features'] = points_mean.contiguous()
 
         return batch_dict
 
-def post_act_block(in_channels, out_channels, kernel_size, indice_key=None, stride=1, padding=0,
-                   conv_type='subm', norm_fn=None):
-
-    if conv_type == 'subm':
-        conv = spconv.SubMConv3d(in_channels, out_channels, kernel_size, bias=False, indice_key=indice_key)
-    elif conv_type == 'spconv':
-        conv = spconv.SparseConv3d(in_channels, out_channels, kernel_size, stride=stride, padding=padding,
-                                   bias=False, indice_key=indice_key)
-    elif conv_type == 'inverseconv':
-        conv = spconv.SparseInverseConv3d(in_channels, out_channels, kernel_size, indice_key=indice_key, bias=False)
-    else:
-        raise NotImplementedError
-
-    m = spconv.SparseSequential(
-        conv,
-        norm_fn(out_channels),
-        nn.ReLU(),
-    )
-
-    return m
-    
 class VoxelBackBone8x(nn.Module):
     '''spconv version. Still exists bug.'''
     def __init__(self, model_cfg, input_channels, grid_size, **kwargs):
@@ -104,10 +63,10 @@ class VoxelBackBone8x(nn.Module):
         )
 
         self.conv2 = scn.Sequential(
-            scn.Convolution(3, 16, 32, 3, 3, False),
+            scn.Convolution(3, 16, 32, 3, 2, False),
             scn.BatchNormReLU(32),
-            scn.SubmanifoldConvolution(3, 32, 32, 3, False),
-            scn.BatchNormReLU(32),
+            # scn.SubmanifoldConvolution(3, 32, 32, 3, False),
+            # scn.BatchNormReLU(32),
             scn.SubmanifoldConvolution(3, 32, 32, 3, False),
             scn.BatchNormReLU(32)
         )
@@ -115,8 +74,8 @@ class VoxelBackBone8x(nn.Module):
         self.conv3 = scn.Sequential(
             scn.Convolution(3, 32, 64, 3, 2, False),
             scn.BatchNormReLU(64),
-            scn.SubmanifoldConvolution(3, 64, 64, 3, False),
-            scn.BatchNormReLU(64),
+            # scn.SubmanifoldConvolution(3, 64, 64, 3, False),
+            # scn.BatchNormReLU(64),
             scn.SubmanifoldConvolution(3, 64, 64, 3, False),
             scn.BatchNormReLU(64)
         )
@@ -124,14 +83,14 @@ class VoxelBackBone8x(nn.Module):
         self.conv4 = scn.Sequential(
             scn.Convolution(3, 64, 64, 3, 2, False),
             scn.BatchNormReLU(64),
-            scn.SubmanifoldConvolution(3, 64, 64, 3, False),
-            scn.BatchNormReLU(64),
+            # scn.SubmanifoldConvolution(3, 64, 64, 3, False),
+            # scn.BatchNormReLU(64),
             scn.SubmanifoldConvolution(3, 64, 64, 3, False),
             scn.BatchNormReLU(64)
         )
 
         self.conv_out = scn.Sequential(
-            scn.Convolution(3, 64, 128, [3, 1, 1], [2,1,1], False),
+            scn.Convolution(3, 64, 128, [3, 1, 1], 1, False),
             scn.BatchNormReLU(128)
         )
 
@@ -150,6 +109,11 @@ class VoxelBackBone8x(nn.Module):
             'x_conv3': 64,
             'x_conv4': 64
         }
+    
+    def Padding(self, input_layer, padding=1):
+        features = input_layer.features
+        pad = nn.ConstantPad2d((0,1,0,0),0)
+        return features
 
     def forward(self, batch_dict):
         """
@@ -161,30 +125,9 @@ class VoxelBackBone8x(nn.Module):
         Returns:
             batch_dict:
                 encoded_spconv_tensor: sparse tensor
-        """
-
-        for key, val in batch_dict.items():
-            if key in ['voxels', 'voxel_num_points', 'voxel_features']:
-                coors = []
-                for i, coor in enumerate(val):
-                    coors.append(coor)
-                batch_dict[key] = torch.cat(coors,dim=0)
-                # batch = val.size()[0]
-                # batch_dict[key] = val.view(-1, m, d)
-                # ret[key] = np.concatenate(val, axis=0)
-            elif key in ['points', 'voxel_coords']:
-                coors = []
-                for i, coor in enumerate(val):
-                    '''[batch, n, dim]  -->  [n, 1+dim] (batch_idx, x, y, z)'''
-                    pad = nn.ConstantPad2d((0,1,0,0),i)
-                    coor_pad = pad(coor)
-                    # coor_pad = np.pad(coor, ((0, 0), (1, 0)), mode='constant', constant_values=i)
-                    coors.append(coor_pad)
-                batch_dict[key] = torch.cat(coors,dim=0)
-
-        
-        
+        """        
         input = self.input_layer([batch_dict['voxel_coords'], batch_dict['voxel_features']])
+        # input = self.Padding(input)
         x_conv1 = self.conv1(input)
         x_conv2 = self.conv2(x_conv1)
         x_conv3 = self.conv3(x_conv2)
@@ -231,7 +174,7 @@ class VoxelBackBone8x_spconv(nn.Module):
             norm_fn(16),
             nn.ReLU(),
         )
-        block = post_act_block
+        block = self.post_act_block
 
         self.conv1 = spconv.SparseSequential(
             block(16, 16, 3, norm_fn=norm_fn, padding=1, indice_key='subm1'),
@@ -274,6 +217,26 @@ class VoxelBackBone8x_spconv(nn.Module):
             'x_conv3': 64,
             'x_conv4': 64
         }
+    
+    def post_act_block(in_channels, out_channels, kernel_size, indice_key=None, stride=1, padding=0,
+                   conv_type='subm', norm_fn=None):
+        if conv_type == 'subm':
+            conv = spconv.SubMConv3d(in_channels, out_channels, kernel_size, bias=False, indice_key=indice_key)
+        elif conv_type == 'spconv':
+            conv = spconv.SparseConv3d(in_channels, out_channels, kernel_size, stride=stride, padding=padding,
+                                    bias=False, indice_key=indice_key)
+        elif conv_type == 'inverseconv':
+            conv = spconv.SparseInverseConv3d(in_channels, out_channels, kernel_size, indice_key=indice_key, bias=False)
+        else:
+            raise NotImplementedError
+
+        m = spconv.SparseSequential(
+            conv,
+            norm_fn(out_channels),
+            nn.ReLU(),
+        )
+
+        return m
 
     def forward(self, batch_dict):
         """
@@ -347,10 +310,11 @@ class VoxelBackBone8x_spconv(nn.Module):
         return batch_dict
 
 class HeightCompression(nn.Module):
-    def __init__(self, model_cfg, **kwargs):
+    def __init__(self, model_cfg, NUM_OUTPUT_FEATURES, **kwargs):
         super().__init__()
         self.model_cfg = model_cfg
         self.num_bev_features = self.model_cfg.NUM_BEV_FEATURES
+        self.todense = scn.SparseToDense(3, NUM_OUTPUT_FEATURES)
 
     def forward(self, batch_dict):
         """
@@ -363,13 +327,13 @@ class HeightCompression(nn.Module):
 
         """
         encoded_spconv_tensor = batch_dict['encoded_spconv_tensor']
-        spatial_features = encoded_spconv_tensor.dense()
+        spatial_features = self.todense(encoded_spconv_tensor)
+        # spatial_features = encoded_spconv_tensor.dense()
         N, C, D, H, W = spatial_features.shape
         spatial_features = spatial_features.view(N, C * D, H, W)
         batch_dict['spatial_features'] = spatial_features
         batch_dict['spatial_features_stride'] = batch_dict['encoded_spconv_tensor_stride']
         return batch_dict
-
 
 class BaseBEVBackbone(nn.Module):
     def __init__(self, model_cfg, input_channels):
@@ -529,6 +493,7 @@ class VoxelSetAbstraction(nn.Module):
         self.SA_layer_names = []
         self.downsample_times_map = {}
         c_in = 0
+
         for src_name in self.model_cfg.FEATURES_SOURCE:
             if src_name in ['bev', 'raw_points']:
                 continue
@@ -565,6 +530,19 @@ class VoxelSetAbstraction(nn.Module):
                 pool_method='max_pool'
             )
             c_in += sum([x[-1] for x in mlps])
+        
+        self.mlps = nn.Sequential(
+            nn.Linear(3, 8,  bias=False),
+            nn.BatchNorm1d(8),
+            nn.ReLU(),
+            nn.Linear(8, 16, bias=False),
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
+            nn.Linear(16, 32,  bias=False),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+        )
+        c_in=1
 
         self.vsa_point_feature_fusion = nn.Sequential(
             nn.Linear(c_in, self.model_cfg.NUM_OUTPUT_FEATURES, bias=False),
@@ -573,6 +551,10 @@ class VoxelSetAbstraction(nn.Module):
         )
         self.num_point_features = self.model_cfg.NUM_OUTPUT_FEATURES
         self.num_point_features_before_fusion = c_in
+
+        self.nsample =16
+        self.group = pointnet2_utils_stack.QueryAndGroup2(0.4, self.nsample, use_xyz=True)
+
 
     def interpolate_from_bev_features(self, keypoints, bev_features, batch_size, bev_stride):
         x_idxs = (keypoints[:, :, 0] - self.point_cloud_range[0]) / self.voxel_size[0]
@@ -650,7 +632,32 @@ class VoxelSetAbstraction(nn.Module):
             point_coords: (N, 4)
 
         """
-        keypoints = self.get_sampled_points(batch_dict)
+        # keypoints = self.get_sampled_points(batch_dict)
+        keypoints = batch_dict['keypoints'][:,:,:3]
+        batch_size, num_keypoints, _ = keypoints.shape
+
+        new_xyz = keypoints.view(-1, 3).contiguous()
+        new_xyz_batch_cnt = new_xyz.new_zeros(batch_size).int().fill_(num_keypoints)
+        # if torch.isnan(self.SA_rawpoints.mlps[0][0].weight[0]).sum()>0:
+        #     print('pause')
+
+        '''group KNN neighbour'''
+        # raw_points = batch_dict['points']
+        # xyz = raw_points[:, :3]
+        # xyz_batch_cnt = xyz.new_zeros(batch_size).int()
+        # for bs_idx in range(batch_size):
+        #     xyz_batch_cnt[bs_idx] = (raw_points[:, -1] == bs_idx).sum()
+        # all_keypoints, all_keypoints_indice = \
+        #             self.group(xyz.contiguous(), xyz_batch_cnt, new_xyz, new_xyz_batch_cnt)
+        # all_keypoints = all_keypoints.transpose(1,2).contiguous()
+        # all_keypoints = all_keypoints.view(batch_size, num_keypoints, self.nsample, 3)
+        # all_keypoints = all_keypoints.reshape(batch_size, num_keypoints*self.nsample, 3)
+        
+        # keypoints = all_keypoints
+        # num_keypoints = num_keypoints * self.nsample
+        # new_xyz = keypoints.view(-1, 3).contiguous()
+        # new_xyz_batch_cnt = new_xyz.new_zeros(batch_size).int().fill_(num_keypoints)
+
 
         point_features_list = []
         if 'bev' in self.model_cfg.FEATURES_SOURCE:
@@ -660,17 +667,15 @@ class VoxelSetAbstraction(nn.Module):
             )
             point_features_list.append(point_bev_features)
 
-        batch_size, num_keypoints, _ = keypoints.shape
-        new_xyz = keypoints.view(-1, 3)
-        new_xyz_batch_cnt = new_xyz.new_zeros(batch_size).int().fill_(num_keypoints)
-
+        
         if 'raw_points' in self.model_cfg.FEATURES_SOURCE:
+            a = time.time()
             raw_points = batch_dict['points']
-            xyz = raw_points[:, 1:4]
+            xyz = raw_points[:, :3]
             xyz_batch_cnt = xyz.new_zeros(batch_size).int()
             for bs_idx in range(batch_size):
-                xyz_batch_cnt[bs_idx] = (raw_points[:, 0] == bs_idx).sum()
-            point_features = raw_points[:, 4:].contiguous() if raw_points.shape[1] > 4 else None
+                xyz_batch_cnt[bs_idx] = (raw_points[:, -1] == bs_idx).sum()
+            point_features = raw_points[:, 3:-1].contiguous() if raw_points.shape[1] > 4 else None
 
             pooled_points, pooled_features = self.SA_rawpoints(
                 xyz=xyz.contiguous(),
@@ -680,18 +685,23 @@ class VoxelSetAbstraction(nn.Module):
                 features=point_features,
             )
             point_features_list.append(pooled_features.view(batch_size, num_keypoints, -1))
+            b= time.time()
+            # print('raw point ',b-a)
+            print(self.SA_rawpoints.mlps[0][0].weight[0])
+
 
         for k, src_name in enumerate(self.SA_layer_names):
-            cur_coords = batch_dict['multi_scale_3d_features'][src_name].indices
+            cur_coords = batch_dict['multi_scale_3d_features'][src_name].get_spatial_locations()
             xyz = common_utils.get_voxel_centers(
-                cur_coords[:, 1:4],
+                cur_coords[:, :3],
                 downsample_times=self.downsample_times_map[src_name],
                 voxel_size=self.voxel_size,
-                point_cloud_range=self.point_cloud_range
+                point_cloud_range=self.point_cloud_range,
+                device = batch_dict['multi_scale_3d_features'][src_name].features.device
             )
             xyz_batch_cnt = xyz.new_zeros(batch_size).int()
             for bs_idx in range(batch_size):
-                xyz_batch_cnt[bs_idx] = (cur_coords[:, 0] == bs_idx).sum()
+                xyz_batch_cnt[bs_idx] = (cur_coords[:, -1] == bs_idx).sum()
 
             pooled_points, pooled_features = self.SA_layers[k](
                 xyz=xyz.contiguous(),
@@ -702,16 +712,33 @@ class VoxelSetAbstraction(nn.Module):
             )
             point_features_list.append(pooled_features.view(batch_size, num_keypoints, -1))
 
-        point_features = torch.cat(point_features_list, dim=2)
+
+        
+
+        key_points = batch_dict['keypoints'].view(-1, 4).contiguous()
+        point_features = key_points[:,:3].contiguous() 
+        point_features = self.mlps(point_features.view(-1, point_features.shape[-1]))
+        batch_dict['point_features'] = point_features  # (BxN, C)
 
         batch_idx = torch.arange(batch_size, device=keypoints.device).view(-1, 1).repeat(1, keypoints.shape[1]).view(-1)
         point_coords = torch.cat((batch_idx.view(-1, 1).float(), keypoints.view(-1, 3)), dim=1)
-
-        batch_dict['point_features_before_fusion'] = point_features.view(-1, point_features.shape[-1])
-        point_features = self.vsa_point_feature_fusion(point_features.view(-1, point_features.shape[-1]))
-
-        batch_dict['point_features'] = point_features  # (BxN, C)
         batch_dict['point_coords'] = point_coords  # (BxN, 4)
+
+        # point_features = torch.cat(point_features_list, dim=2)
+
+        # batch_idx = torch.arange(batch_size, device=keypoints.device).view(-1, 1).repeat(1, keypoints.shape[1]).view(-1)
+        # point_coords = torch.cat((batch_idx.view(-1, 1).float(), keypoints.view(-1, 3)), dim=1)
+
+        # batch_dict['point_features_before_fusion'] = point_features.view(-1, point_features.shape[-1])
+        # point_features = self.vsa_point_feature_fusion(point_features.view(-1, point_features.shape[-1]))
+
+        # batch_dict['point_features'] = point_features  # (BxN, C)
+        # batch_dict['point_coords'] = point_coords  # (BxN, 4)
+
+        if torch.isnan(point_features).sum()>0:
+            print('pause')
+
+        
         return batch_dict
 
 
@@ -732,180 +759,393 @@ class FeatureExtractor(nn.Module):
         super().__init__()
         # self.config = {**self.default_config, **config}
 
-        
-
-        self.vfe = MeanVFE()
-        self.vconv = VoxelBackBone8x(cfgs.BACKBONE_3D, dataset.num_point_features, dataset.grid_size)
-        self.hc = HeightCompression(cfgs.MAP_TO_BEV)
+        # self.vfe = MeanVFE()
+        # self.vconv = VoxelBackBone8x(cfgs.BACKBONE_3D, dataset.num_point_features, dataset.grid_size)
+        self.hc = HeightCompression(cfgs.MAP_TO_BEV, cfgs.PFE.NUM_OUTPUT_FEATURES)
         self.pfe = VoxelSetAbstraction(cfgs.PFE, dataset.voxel_size, dataset.point_cloud_range, self.hc.num_bev_features, dataset.num_point_features)
+        
+        self.point_cloud_range = dataset.point_cloud_range
+        self.grid_size = dataset.grid_size
+        self.num_point_features = dataset.num_point_features
+        self.voxel_size = dataset.voxel_size
+        self.max_num_points_per_voxel = dataset.max_num_points_per_voxel
+        self.max_voxels = dataset.max_voxels
+        self.max_points = dataset.max_points
+
+        self.groupers = pointnet2_utils_stack.QueryAndGroup(1, 50, use_xyz=True)
+        self.threshold = dataset.threshold
+        self.mutual_check = dataset.mutual_check
+
+        self.num_keypoints = 2048
+
+    def UNPadding(self, bacth_dict):
+        '''Handle uneven input'''
+        points = {}
+        # kpss = {}
+        for key in ['pc1', 'pc0']:
+            val = bacth_dict[key]
+            coors = []
+            coors_pad = []
+            # kps = []
+            for i, coor in enumerate(val):
+                coor = coor[:(coor[:,-1]>-1).sum(),:]
+                pad = nn.ConstantPad2d((0,1,0,0),i)
+                coor_pad = pad(coor)
+                coors.append(coor)
+                coors_pad.append(coor_pad)
+
+                # cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
+                #     coor[None,:,:3].contiguous(), self.num_keypoints
+                # ).long()[0]
+                # kp = coor[cur_pt_idxs,:]
+                # kps.append(kp)
+
+            bacth_dict[key] = torch.cat(coors_pad,dim=0)
+            points[key] = coors
+            # kpss[key] = torch.stack(kps,dim=0)
+        
+        # voxels_num = []
+        # for i, key in enumerate(['voxel_num_points0', 'voxel_num_points1']):
+        #     val = bacth_dict[key]
+        #     voxels_num.append([])
+        #     coors = []
+        #     for b, coor in enumerate(val):
+        #         voxels_num[i].append((coor>0).sum())
+        #         coor = coor[:voxels_num[i][b]]
+        #         coors.append(coor)
+                
+        #     bacth_dict[key] = torch.cat(coors,dim=0)
+        
+        # for i, key in enumerate(['voxel_coords0', 'voxel_coords1']):
+        #     val = bacth_dict[key]
+        #     coors = []
+        #     for b, coor in enumerate(val):
+        #         coor = coor[:voxels_num[i][b]]
+        #         pad = nn.ConstantPad2d((0,1,0,0),b)
+        #         coor = pad(coor)
+        #         coors.append(coor)
+        #     bacth_dict[key] = torch.cat(coors,dim=0)
+
+        # for i, key in enumerate(['voxels0', 'voxels1']):
+        #     val = bacth_dict[key]
+        #     coors = []
+        #     for b, coor in enumerate(val):
+        #         coor = coor[:voxels_num[i][b]]
+        #         coors.append(coor)
+        #     bacth_dict[key] = torch.cat(coors,dim=0)
+                
+        return bacth_dict, points
+    
+    def transform_points_to_voxels(self, points):
+        '''torchsparse'''
+        # from torchsparse.utils.quantize import sparse_quantize
+        # inputs = np.random.uniform(-100, 100, size=(10000, 4))
+
+        # coords, feats = inputs[:, :3], inputs
+        # coords -= np.min(coords, axis=0, keepdims=True)
+        # coords, indices = sparse_quantize(coords,
+        #                                   0.2,
+        #                                   return_index=True)
+        # coords = torch.tensor(coords, dtype=torch.int)
+        # feats = torch.tensor(feats[indices], dtype=torch.float)
+
+        # from torch import nn
+        # from torchsparse import SparseTensor
+        # from torchsparse import nn as spnn
+        # pad = nn.ConstantPad2d((0,1,0,0),0)
+        # coords = pad(coords)
+        # input_sp_tensor = SparseTensor(coords=coords, feats=feats)
+        # net = nn.Sequential(
+        #     spnn.Conv3d(4, 16, 3, bias=False),
+        #     spnn.BatchNorm(16),
+        #     spnn.ReLU(True),
+        # )
+        # x = net(input_sp_tensor)
+
+        '''spconv 1.2'''
+        # import spconv
+        # voxel_generator = spconv.utils.VoxelGenerator(
+        #     voxel_size=self.voxel_size,
+        #     point_cloud_range=self.point_cloud_range,
+        #     max_num_points=self.max_num_points,
+        #     max_voxels=self.max_voxels,
+        #     # full_mean=False
+        # )        
+        # # pc = np.random.uniform(-10, 10, size=[1000, 3])
+        # voxel_features, voxel_coords, num_points = voxel_generator.generate(points.astype(np.float32))
+        # voxel_features = voxel_features[:,0,:]
+        # voxel_coords = np.pad(voxel_coords, ((0, 0), (1, 0)), mode='constant', constant_values=0)
+        # voxel_coords = torch.tensor(voxel_coords, dtype=torch.int32)
+        # voxel_features = torch.tensor(voxel_features, dtype=torch.float32)
+        # # self.shape = [80, 200, 200]
+        # x = spconv.SparseConvTensor(voxel_features, voxel_coords, self.grid_size, 1)
+        
+        
+        '''spconv 2'''
+        # from spconv.pytorch.utils import PointToVoxel, gather_features_by_pc_voxel_id
+        # # this generator generate ZYX indices.
+        # gen = PointToVoxel(
+        #     vsize_xyz=[0.1, 0.1, 0.1], 
+        #     coors_range_xyz=[-80, -80, -2, 80, 80, 6], 
+        #     num_point_features=3, 
+        #     max_num_voxels=5000, 
+        #     max_num_points_per_voxel=5)
+        # pc = np.random.uniform(-10, 10, size=[1000, 3])
+        # pc_th = torch.from_numpy(pc)
+        # voxels, coords, num_points_per_voxel = gen(pc_th, empty_mean=True)
+    
+        from spconv.pytorch.utils import PointToVoxel
+        voxel_generator = PointToVoxel(
+            vsize_xyz=self.voxel_size,
+            coors_range_xyz=self.point_cloud_range,
+            num_point_features=self.num_point_features,
+            max_num_points_per_voxel=self.max_num_points_per_voxel,
+            max_num_voxels=self.max_voxels,
+            device=points.device
+        )        
+        voxel_output = voxel_generator(points)
+        voxels, coordinates, num_points = voxel_output
+
+        # data_dict={}
+        
+        # if not data_dict['use_lead_xyz']:
+        #     voxels = voxels[..., 3:]  # remove xyz in voxels(N, 3)
+
+        # data_dict['points'] = points
+        return voxels, coordinates, num_points
+
+    def Voxelization(self, points, batch_size):
+        voxels0 = []; voxel_coords0 = []; voxel_num_points0 = []
+        voxels1 = []; voxel_coords1 = []; voxel_num_points1 = [] 
+        for i in range(batch_size):
+            pc0, pc1 = points['pc0'][i], points['pc1'][i]
+            a0, b0, c0 = self.transform_points_to_voxels(pc0)
+            a1, b1, c1 = self.transform_points_to_voxels(pc1)
+            pad = nn.ConstantPad2d((0,1,0,0),i)
+            b0 = pad(b0)
+            b1 = pad(b1)
+            voxels0.append(a0)
+            voxel_coords0.append(b0)
+            voxel_num_points0.append(c0)
+            voxels1.append(a1)
+            voxel_coords1.append(b1)
+            voxel_num_points1.append(c1)
+        voxels0 = torch.cat(voxels0,dim=0)
+        voxel_coords0 = torch.cat(voxel_coords0,dim=0)
+        voxel_num_points0 = torch.cat(voxel_num_points0,dim=0)
+        voxels1 = torch.cat(voxels1,dim=0)
+        voxel_coords1 = torch.cat(voxel_coords1,dim=0)
+        voxel_num_points1 = torch.cat(voxel_num_points1,dim=0)
+
+        batch0 = {
+            'voxels': voxels0,
+            'voxel_coords': voxel_coords0,
+            'voxel_num_points': voxel_num_points0
+        }
+
+        batch1 = {
+            'voxels': voxels1,
+            'voxel_coords': voxel_coords1,
+            'voxel_num_points': voxel_num_points1
+        }
+
+        return batch0, batch1
+    
+    def FPS(self, data, batch_size, device):
+        keypoints = {}
+        for key in ['rd_pc0', 'rd_pc1']:
+            raw_points = data[key]
+
+            # xyz = raw_points[:,:3]
+            # xyz_batch_cnt = xyz.new_zeros(batch_size).int()
+            # for bs_idx in range(batch_size):
+            #     xyz_batch_cnt[bs_idx] = (raw_points[:, -1] == bs_idx).sum()
+
+            # if self.mode == 'train' or self.mode == 'val':
+            #     '''Use pre-extracted key point'''
+            #     kp_np_file1 = os.path.join(self.train_path,'fps', sequence, '%06d.bin' % (index_in_seq))
+            #     kp_np1 = np.fromfile(kp_np_file1, dtype=np.float32)
+            #     kp1 = kp_np1.reshape((-1, 4))
+
+            #     kp_np_file2 = os.path.join(self.train_path,'fps', sequence, '%06d.bin' % (index_in_seq2))
+            #     kp_np2 = np.fromfile(kp_np_file2, dtype=np.float32)
+            #     kp2 = kp_np2.reshape((-1, 4))
+
+            #     kp1 = torch.tensor(kp1, dtype=torch.float, device=device)
+            #     kp2 = torch.tensor(kp2, dtype=torch.float, device=device)
+            # elif self.mode == 'test':
+            '''FPS the key point in real-time'''
+            cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
+                raw_points.contiguous(), self.num_keypoints
+            ).long()
+
+            B = torch.arange(0, batch_size, device=device).view(-1, 1).repeat(1, self.num_keypoints)
+            kp = raw_points[B, cur_pt_idxs, :]
+            keypoints[key] = kp
+
+        return keypoints
+
+    def  CalculateMatches(self, keypoints, data, batch_size, device):
+        '''calculate ground true matches'''
+        kp0 = keypoints['rd_pc0'][:,:,:3]
+        pad = nn.ConstantPad3d((0,1,0,0),1)
+        kp1_ = pad(keypoints['rd_pc1'][:,:,:3])
+        kp1to0 = torch.einsum('nki,nij->njk', data['T_gt'], kp1_.transpose(1,2))[:,:,:3]
+        
+        match0to1, match1to0 = -1 * torch.ones((batch_size, len(kp0[0])), dtype=torch.long, device=device), \
+                            -1 * torch.ones((batch_size, len(kp1to0[0])), dtype=torch.long, device=device)
+
+        dists = torch.norm((kp0.view(batch_size,len(kp0[0]),1,3)-kp1to0.view(batch_size,1,len(kp1to0[0]),3)),dim=3)  #
+        min0to1 = torch.min(dists, dim=2)
+        match0to1[min0to1.values < self.threshold] = min0to1.indices[min0to1.values < self.threshold]
+
+        min1to0 = torch.min(dists, dim=1)
+        match1to0[min1to0.values < self.threshold] = min1to0.indices[min1to0.values < self.threshold]
+
+        rep = (min0to1.values < self.threshold).sum(dim=1)
+
+        return match0to1, match1to0, rep
+
+    def FindSaliencePoint(self, batch_dict0, batch_dict1, batch_size, device):
+        '''Find keypoint amoung neighbours based on salience score'''
+        # features0 = batch_dict0['point_features'].view(batch_size, self.num_keypoints, 16, -1)
+        # features1 = batch_dict1['point_features'].view(batch_size, self.num_keypoints, 16, -1)
+        # coords0 = batch_dict0['point_coords'].view(batch_size, self.num_keypoints, 16, -1)
+        # coords1 = batch_dict1['point_coords'].view(batch_size, self.num_keypoints, 16, -1)
+        # B = torch.arange(0, batch_size, device=device).view(-1, 1).repeat(1, self.num_keypoints)
+        # N = torch.arange(0, self.num_keypoints, device=device).view(1, -1).repeat(batch_size, 1)
+
+        # alpha = torch.exp(features0)/torch.sum(torch.exp(features0),dim=2)[:,:,None]
+        # beta = features0/torch.max(features0, dim=3).values[:,:,:,None]
+        # salience_score = torch.max(alpha * beta, dim=-1).values
+        # indices = torch.max(salience_score, dim=2).indices
+        # salience_score1 = torch.max(salience_score, dim=2).values
+        # features0 = features0[B,N,indices,:]
+        # coords0 = coords0[B,N,indices,1:]
+
+        # alpha = torch.exp(features1)/torch.sum(torch.exp(features1),dim=2)[:,:,None]
+        # beta = features1/torch.max(features1, dim=3).values[:,:,:,None]
+        # salience_score = torch.max(alpha * beta, dim=-1).values
+        # indices = torch.max(salience_score, dim=2).indices
+        # salience_score2 = torch.max(salience_score, dim=2).values
+        # features1 = features1[B,N,indices,:]
+        # coords1 = coords1[B,N,indices,1:]
+
+        # keypoints = {}
+        # keypoints['rd_pc0'] = coords0
+        # keypoints['rd_pc1'] = coords1
+
+        '''calculate salience score'''
+        features0 = batch_dict0['point_features'].view(batch_size, self.num_keypoints, -1)
+        features1 = batch_dict1['point_features'].view(batch_size, self.num_keypoints, -1)
+        coords0 = batch_dict0['point_coords'].view(batch_size, self.num_keypoints, -1)
+        coords1 = batch_dict1['point_coords'].view(batch_size, self.num_keypoints, -1)
+        alpha = torch.exp(features0)/torch.sum(torch.exp(features0),dim=1)[:,None]
+        beta = features0/torch.max(features0, dim=2).values[:,:,None]
+        salience_score1 = torch.max(alpha * beta, dim=-1).values
+        alpha = torch.exp(features1)/torch.sum(torch.exp(features1),dim=1)[:,None]
+        beta = features1/torch.max(features1, dim=2).values[:,:,None]
+        salience_score2 = torch.max(alpha * beta, dim=-1).values
+        keypoints = {}
+        keypoints['rd_pc0'] = coords0
+        keypoints['rd_pc1'] = coords1
+
+        return features0, features1, keypoints, salience_score1, salience_score2
+
+    def EuclideanDistances(self,a,b):
+        sq_a = a**2
+        sum_sq_a = torch.sum(sq_a,dim=2).unsqueeze(2)  # m->[m, 1]
+        sq_b = b**2
+        sum_sq_b = torch.sum(sq_b,dim=2).unsqueeze(1)  # n->[1, n]
+        bt = b.transpose(2,1)
+        return torch.sqrt(torch.clamp(sum_sq_a+sum_sq_b-2*torch.einsum('bnd,bdm->bnm', a, bt), min=0))
 
     def forward(self, data):
         """Run PVRCNN on keypoints:MEANVFE + VoxelBackBone8x + HeightCompression +
             VoxelSetAbstraction + BaseBEVBackbone
         """
-        
-        kpts0, kpts1 = data['keypoints0'].double(), data['keypoints1'].double()
+        c = time.time()
+        batch_size, _, _ = data['pc0'].size()
+        device = data['pc0'].device
+        data, points = self.UNPadding(data)
+        # keypoints = self.FPS(data, batch_size, device)
+        keypoints={}
+        keypoints['rd_pc0'] = data['keypoints0']
+        keypoints['rd_pc1'] = data['keypoints1']
+        # with torch.no_grad():
+        # match0to1, match1to0, rep = self.CalculateMatches(keypoints, data, batch_size, device)
+        match0to1 = data['match0'].long().cuda()
+        a2 = time.time()
+        # print('fps ', a2-c)
 
-        batch_size, _, _ = kpts0.size()
-
-        x = time.time()
-         
-        batch_dict0, batch_dict1 = {}, {}
-        batch_dict0['voxels'], batch_dict1['voxels'] = data['voxels0'], data['voxels1']
-        batch_dict0['voxel_coords'], batch_dict1['voxel_coords'] = data['voxel_coords0'], data['voxel_coords1']
-        batch_dict0['voxel_num_points'], batch_dict1['voxel_num_points'] = data['voxel_num_points0'], data['voxel_num_points1']
+        # batch_dict0, batch_dict1 = self.Voxelization(points, batch_size)
+        batch_dict0={}
+        batch_dict1={}
         batch_dict0['batch_size'] = batch_dict1['batch_size'] = batch_size
+        batch_dict0['keypoints'], batch_dict1['keypoints'] = keypoints['rd_pc0'], keypoints ['rd_pc1']
+        batch_dict0['points'], batch_dict1['points'] = data['pc0'], data['pc1']
 
-        batch_dict0 = self.vfe(batch_dict0)
-        batch_dict0 = self.vconv(batch_dict0)
-        return None
+        a = time.time()
+        # print('voxel ', a-a2)
+        # batch_dict0, batch_dict1 = self.vfe(batch_dict0), self.vfe(batch_dict1)
+        # batch_dict0, batch_dict1 = self.vconv(batch_dict0), self.vconv(batch_dict1)
+        # batch_dict0, batch_dict1 = self.hc(batch_dict0), self.hc(batch_dict1)
+        a1 = time.time()
+        # print('spconv ', a1-a)
+        batch_dict0, batch_dict1 = self.pfe(batch_dict0), self.pfe(batch_dict1)
+        b = time.time()
+        # print('pfe ', b-a1)
 
-        # batch_idx = torch.arange(0, batch_size, dtype=int).view(-1, 1).repeat(1, 2048)
-        # fp = pc0[batch_idx, cur_pt_idxs, :]
-        # y= time.time()
-        # print('pybind ',y-x)
-
-        # point_cloud_o3d2 = o3d.geometry.PointCloud()
-        # point_cloud_o3d2.points = o3d.utility.Vector3dVector(fp.numpy()[0,:,:])
-        # point_cloud_o3d2.translate(np.asarray([0, 120, 0]))
-
-        # point_cloud_o3d = o3d.geometry.PointCloud()
-        # point_cloud_o3d.points = o3d.utility.Vector3dVector(pc1.numpy()[0, :, :3])
-        # # point_cloud_o3d.normals = o3d.utility.Vector3dVector(pc1[:, 3:6])
-        # o3d.visualization.draw_geometries([point_cloud_o3d+point_cloud_o3d2])
-    
-        # if kpts0.shape[1] == 0 or kpts1.shape[1] == 0:  # no keypoints
-        #     shape0, shape1 = kpts0.shape[:-1], kpts1.shape[:-1]
-        #     return {
-        #         'matches0': kpts0.new_full(shape0, -1, dtype=torch.int)[0],
-        #         'matches1': kpts1.new_full(shape1, -1, dtype=torch.int)[0],
-        #         'matching_scores0': kpts0.new_zeros(shape0)[0],
-        #         'matching_scores1': kpts1.new_zeros(shape1)[0],
-        #         'skip_train': True
-        #     }
-        # # file_name = data['file_name']
+        features0, features1, keypoints, salience_score0, salience_score1 =\
+            self.FindSaliencePoint(batch_dict0, batch_dict1, batch_size, device)
         
-        # # Keypoint normalization.
-        # # kpts0 = normalize_keypoints(kpts0, data['cloud0'].shape)
-        # # kpts1 = normalize_keypoints(kpts1, data['cloud1'].shape)
 
-        # if self.descriptor == 'FPFH':
-        #     desc0, desc1 = data['descriptors0'].double(), data['descriptors1'].double()
-        #     # Keypoint MLP encoder.
-        #     desc0 = self.denc(desc0) + self.kenc(kpts0, data['scores0'])
-        #     desc1 = self.denc(desc1) + self.kenc(kpts1, data['scores1'])
-        #     # Multi-layer Transformer network.
-        #     desc0, desc1 = self.gnn(desc0, desc1, kpts0, kpts1, lrf0, lrf1, self.k, self.config['L'])
-        #     # Final MLP projection.
-        #     mdesc0, mdesc1 = self.final_proj(desc0), self.final_proj(desc1)
-        # else:
-        #     raise Exception('Invalid descriptor.')
+        feature_distance = self.EuclideanDistances(features0, features1)
 
-        # # Compute matching descriptor distance.
-        # scores = torch.einsum('bdn,bdm->bnm', mdesc0, mdesc1)
-        # scores = scores / self.config['descriptor_dim']**.5
+        # with torch.no_grad():
+        # after_match0to1, after_match1to0, rep2 = self.CalculateMatches(keypoints, data, batch_size, device)
+        B = torch.arange(0, batch_size, device=device).view(-1, 1).repeat(1, self.num_keypoints)
+        N = torch.arange(0, self.num_keypoints, device=device).view(1, -1).repeat(batch_size, 1)
+        after_match0to1 = match0to1
+        cdist = feature_distance[B,N,after_match0to1]
 
-        # # Run the optimal transport.
-        # scores = log_optimal_transport(
-        #     scores, self.bin_score,
-        #     iters=self.config['sinkhorn_iterations'])
+        # Or = (match0to1>0)+(after_match0to1>0)
+        # And = (match0to1>0)*(after_match0to1>0)
+        # Xor_penalty = (Or==True)*(after_match0to1<0)
+        # Xor_reward = (Or==True)*(match0to1<0)
 
-        # gt_matches0 = data['match0'] # shape=torch.Size([1, 87, 2])
-        # gt_matches1 = data['match1'] # shape=torch.Size([1, 87, 2])
+        # cdist_with_salience = cdist*(salience_score1[B,after_match0to1]+salience_score0)
+        # rep_loss = (cdist_with_salience[Xor_penalty].sum()+1).log() - (cdist_with_salience[Xor_reward].sum()+1).log()
+        # feature_loss = (cdist[after_match0to1>0].sum()+1).log()
 
-        # # 输出match结果
-        # if self.loss_method == 'superglue':
-        #     max0, max1 = scores[:, :-1, :-1].max(2), scores[:, :-1, :-1].max(1)
-        #     indices0, indices1 = max0.indices, max1.indices
-        #     zero = scores.new_tensor(0)
-        #     if self.mutual_check:
-        #         mutual0 = arange_like(indices0, 1)[None] == indices1.gather(1, indices0) #gather 沿给定轴dim，将输入索引张量index指定位置的值进行聚合。
-        #         mutual1 = arange_like(indices1, 1)[None] == indices0.gather(1, indices1)
-        #         mscores0 = torch.where(mutual0, max0.values.exp(), zero)
-        #         mscores1 = torch.where(mutual1, mscores0.gather(1, indices1), zero)
-        #         valid0 = mutual0 & (mscores0 > self.config['match_threshold'])
-        #         valid1 = mutual1 & valid0.gather(1, indices1)
-        #     else:
-        #         valid0 = max0.values.exp() > self.config['match_threshold']
-        #         valid1 = max1.values.exp() > self.config['match_threshold']
-        #         mscores0 = torch.where(valid0, max0.values.exp(), zero)
-        #         mscores1 = torch.where(valid1, max1.values.exp(), zero)
-        # else:
-        #     max0, max1 = scores[:, :-1, :].max(2), scores[:, :, :-1].max(1)
-        #     indices0, indices1 = max0.indices, max1.indices
-        #     valid0, valid1 = indices0<(scores.size(2)-1), indices1<(scores.size(1)-1)
-        #     zero = scores.new_tensor(0)
-        #     if valid0.sum() == 0:
-        #         mscores0 = torch.zeros_like(indices0, device='cuda')
-        #         mscores1 = torch.zeros_like(indices1, device='cuda')
-        #     else:
-        #         if self.mutual_check:
-        #             batch = indices0.size(0)
-        #             a0 = arange_like(indices0, 1)[None][valid0].view(batch,-1) == indices1.gather(1, indices0[valid0].view(batch,-1))
-        #             a1 = arange_like(indices1, 1)[None][valid1].view(batch,-1) == indices0.gather(1, indices1[valid1].view(batch,-1))
-        #             mutual0 = torch.zeros_like(indices0, device='cuda') > 0
-        #             mutual1 = torch.zeros_like(indices1, device='cuda') > 0
-        #             mutual0[valid0] = a0
-        #             mutual1[valid1] = a1
-        #             mscores0 = torch.where(mutual0, max0.values.exp(), zero)
-        #             mscores1 = torch.where(mutual1, max1.values.exp(), zero)
-        #         else:
-        #             mscores0 = torch.where(valid0, max0.values.exp(), zero)
-        #             mscores1 = torch.where(valid1, max1.values.exp(), zero)
-        # indices0 = torch.where(valid0, indices0, indices0.new_tensor(-1))
-        # indices1 = torch.where(valid1, indices1, indices1.new_tensor(-1))
+        # top2 = (-feature_distance).topk(2,dim=-1)
+        # a = top2[1][:,:,0]==after_match0to1
+        # hard = -top2[0][:,:,0]
+        # hard[a] = -top2[0][:,:,1][a]
 
+        # feature_loss = torch.clamp((cdist - hard)+0.5,min=0)
 
+        feature_loss = cdist.log()
+
+        # feature_loss = ((cdist - hard)*(salience_score1[B,after_match0to1]+salience_score0))[after_match0to1>0]
+        rep_loss=0
+
+        loss = rep_loss + feature_loss.mean()
+
+        b1 = time.time()
+        # print('find salience point ', b1-b)
+        # print('rep ',rep)
+        # print('rep2 ',rep2)
+
+        if torch.isnan(loss):
+            print('pause')
+
+       
         
-        # # calculate loss
-        # if self.loss_method == 'superglue':
-        #     loss = superglue()
-        # elif self.loss_method == 'triplet_loss':
-        #     loss = triplet(self.triplet_loss_gamma)
-        # elif self.loss_method == 'gap_loss':
-        #     loss = gap(self.triplet_loss_gamma)
-        # elif self.loss_method == 'gap_loss_plus':
-        #     loss_mean = gap_plus(gt_matches0, gt_matches1, scores, self.triplet_loss_gamma, self.config['var_weight'])
-        # elif self.loss_method == 'gap_loss_plusplus':
-        #     loss_mean = gap_plusplus(gt_matches0, gt_matches1, scores, self.triplet_loss_gamma, self.config['var_weight'])
-        # elif self.loss_method == 'distribution_loss':
-        #     loss = distribution(self.triplet_loss_gamma)
-        # elif self.loss_method == 'distribution_loss4':
-        #     loss = distribution4(self.triplet_loss_gamma)
-        # elif self.loss_method == 'distribution_loss6':
-        #     loss = distribution6(self.triplet_loss_gamma, self.lamda)
-        # elif self.loss_method == 'distribution_loss7':
-        #     loss = distribution7(self.triplet_loss_gamma)
-        # elif self.loss_method == 'distribution_loss8':
-        #     loss = distribution8(self.triplet_loss_gamma)
-        
-        # if torch.cuda.is_available():
-        #     device=torch.device('cuda:{}'.format(self.local_rank[0]))
-        #     if torch.cuda.device_count() > 1:
-        #         loss = torch.nn.DataParallel(loss, device_ids=self.local_rank)
-        #     else:
-        #         loss = torch.nn.DataParallel(loss)
-        # else:
-        #     device = torch.device("cpu")
-        # loss.to(device)
-        
-        # if self.loss_method == 'distribution_loss6':
-        #     b,d,n = mdesc0.size()
-        #     _,_,m = mdesc1.size()
-        #     distance = mdesc0[:,:,:,None].expand(b,d,n,m) - mdesc1[:,:,None].expand(b,d,n,m)
-        #     distance = torch.sqrt(torch.sum(distance**2, 1)/d)
-        #     loss_mean = loss(gt_matches0, gt_matches1, scores, distance)
-        # else:
-        #     loss_mean = loss(gt_matches0, gt_matches1, scores)
+        return {
+            'loss': loss
+        }
 
-        # return {
-        #     'matches0': indices0, # use -1 for invalid match
-        #     'matches1': indices1, # use -1 for invalid match
-        #     'matching_scores0': mscores0,
-        #     'matching_scores1': mscores1,
-        #     'loss': loss_mean,
-        #     # 'skip_train': False
-        # }
 
     def update_lamda(self, epoch, indicator):
         lamda_clip = 1

@@ -63,7 +63,8 @@ DATA_PROCESSOR:
       VOXEL_SIZE: [0.05, 0.05, 0.1]
       MAX_POINTS_PER_VOXEL: 5
       MAX_NUMBER_OF_VOXELS: {
-        'train': 32000,
+        'train': 90000,
         'val': 80000,
         'test': 80000
       }
+      MAX_NUMBER_OF_POINTS: 130000

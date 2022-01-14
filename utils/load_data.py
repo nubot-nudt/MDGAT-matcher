@@ -21,7 +21,7 @@ from sklearn.neighbors import KDTree
 import time
 
 from pcdet.ops.pointnet2.pointnet2_stack import pointnet2_utils as pointnet2_utils_stack
-
+from collections import defaultdict
 # from autolab_core import RigidTransform
 def load_kitti_gt_txt(txt_root, seq):
     '''
@@ -102,8 +102,8 @@ def farthest_point_sample(xyz, npoint):
 def make_dataset_kitti_kframe(keypoints_path, mode):
         if mode == 'train':
             # seq_list = list(range(9))
-            # seq_list = list([1, 3])
-            seq_list = list([0,2,3,4,5,6,7,9])
+            seq_list = list([3])
+            # seq_list = list([0,2,3,4,5,6,7,9])
         elif mode == 'test':
             seq_list = [10]
         else:
@@ -128,8 +128,8 @@ def make_dataset_kitti_kframe(keypoints_path, mode):
 
 def make_dataset_kitti_distance(txt_path, mode):
         if mode == 'train':
-            seq_list = list(range(11))
-            # seq_list = list([0,2,3,4,5,6,7])
+            # seq_list = list(range(11))
+            seq_list = list([0,2,3,4,5,6,7])
             # seq_list = list([1, 3])
             # seq_list = list([1])
         elif mode == 'val':
@@ -162,9 +162,13 @@ class SparseDataset(Dataset):
         self.grid_size = np.round(grid_size).astype(np.int64)
         self.num_point_features = cfg.DATA_AUGMENTOR.AUG_CONFIG_LIST[0].NUM_POINT_FEATURES
         self.voxel_size = cfg.DATA_PROCESSOR[1].VOXEL_SIZE 
-        self.max_num_points = cfg.DATA_PROCESSOR[1].MAX_POINTS_PER_VOXEL
+        self.max_num_points_per_voxel = cfg.DATA_PROCESSOR[1].MAX_POINTS_PER_VOXEL
         self.max_voxels = cfg.DATA_PROCESSOR[1].MAX_NUMBER_OF_VOXELS[mode]
+        self.max_points = cfg.DATA_PROCESSOR[1].MAX_NUMBER_OF_POINTS
 
+        self.random_sample_num = opt.random_sample_num
+
+        self.points_path = opt.points_path
 
 
         # self.files = []
@@ -234,28 +238,51 @@ class SparseDataset(Dataset):
                 self.pose[sequence] = poses
         
             if self.memory_is_enough:
+                # pcs = []
+                # lrfs= []
+                # folder = os.path.join(self.train_path,'preprocess-undownsample-n8', sequence)
+                # folder = os.listdir(folder)   
+                # folder.sort(key=lambda x:int(x[:-4]))
+                # for idx in range(len(folder)):
+                #     # folder = os.path.join(keypoints_path, 'data_odometry_velodyne', 'numpy', '%02d'%seq, np_folder)
+                #     # folder = os.path.join(keypoints_path, 'sequences', '%02d'%seq, 'velodyne')
+                #     file = os.path.join(self.keypoints_path, sequence, folder[idx])
+                #     lrf_file = os.path.join(self.keypoints_path,'LRF/60-01', sequence, folder[idx])
+                #     if os.path.isfile(file):
+                #         pc = np.fromfile(file, dtype=np.float32)
+                #         lrf = np.fromfile(lrf_file, dtype=np.float32)
+                #         pcs.append(pc)
+                #         lrfs.append(lrf)
+                #         # x = pc.reshape((-1, 37))
+                #         # if x.shape[0] == 256:
+                #         #     print(x)
+                #     else:
+                #         pcs.append([0])
+                # self.pc[sequence] = pcs
+                # self.lrf[sequence] = lrfs
+
                 pcs = []
-                lrfs= []
-                folder = os.path.join(self.train_path,'preprocess-undownsample-n8', sequence)
+                folder = os.path.join(self.train_path,'remove_outlier', sequence)
                 folder = os.listdir(folder)   
                 folder.sort(key=lambda x:int(x[:-4]))
                 for idx in range(len(folder)):
                     # folder = os.path.join(keypoints_path, 'data_odometry_velodyne', 'numpy', '%02d'%seq, np_folder)
                     # folder = os.path.join(keypoints_path, 'sequences', '%02d'%seq, 'velodyne')
-                    file = os.path.join(self.keypoints_path, sequence, folder[idx])
-                    lrf_file = os.path.join(self.keypoints_path,'LRF/60-01', sequence, folder[idx])
+                    file = os.path.join(self.train_path,'remove_outlier', sequence, folder[idx])
+                    # lrf_file = os.path.join(self.keypoints_path,'LRF/60-01', sequence, folder[idx])
                     if os.path.isfile(file):
                         pc = np.fromfile(file, dtype=np.float32)
-                        lrf = np.fromfile(lrf_file, dtype=np.float32)
+                        # lrf = np.fromfile(lrf_file, dtype=np.float32)
                         pcs.append(pc)
-                        lrfs.append(lrf)
+                        # lrfs.append(lrf)
                         # x = pc.reshape((-1, 37))
                         # if x.shape[0] == 256:
                         #     print(x)
                     else:
                         pcs.append([0])
                 self.pc[sequence] = pcs
-                self.lrf[sequence] = lrfs
+                # self.lrf[sequence] = lrfs
+                
     
     def transform_points_to_voxels(self, points):
         '''torchsparse'''
@@ -320,7 +347,7 @@ class SparseDataset(Dataset):
             vsize_xyz=self.voxel_size,
             coors_range_xyz=self.point_cloud_range,
             num_point_features=self.num_point_features,
-            max_num_points_per_voxel=self.max_num_points,
+            max_num_points_per_voxel=self.max_num_points_per_voxel,
             max_num_voxels=self.max_voxels,
             device=points.device
         )        
@@ -334,6 +361,34 @@ class SparseDataset(Dataset):
 
         # data_dict['points'] = points
         return voxels, coordinates, num_points
+    
+    def Padding(self, bacth_dict):
+        '''Handle uneven input'''
+        from torch import nn
+        for key, val in bacth_dict.items():
+            if key in ['pc1', 'pc0']:
+                if len(val) < self.max_points:
+                    pad = nn.ConstantPad2d((0,0,0,230400-len(val)),-1)
+                    val = pad(val)
+                else:
+                    val = val[:self.max_points,:]
+                bacth_dict[key] = val
+            if key in ['voxels0', 'voxels1']:
+                if len(val) < self.max_voxels:
+                    pad = nn.ConstantPad3d((0,0,0,0,0,self.max_voxels-len(val)),0)
+                    val = pad(val)
+                    bacth_dict[key] = val
+            if key in ['voxel_coords0', 'voxel_coords1']:
+                if len(val) < self.max_voxels:
+                    pad = nn.ConstantPad2d((0,0,0,self.max_voxels-len(val)),0)
+                    val = pad(val)
+                    bacth_dict[key] = val
+            if key in ['voxel_num_points0', 'voxel_num_points1']:
+                if len(val) < self.max_voxels:
+                    pad = nn.ConstantPad1d((0,self.max_voxels-len(val)),0)
+                    val = pad(val)
+                    bacth_dict[key] = val
+        return bacth_dict
 
     def __len__(self):
         if self.train_mode == 'kframe':
@@ -345,16 +400,131 @@ class SparseDataset(Dataset):
         else:
             raise Exception('Invalid train_mode.')
 
+    def get_point_cloud(self, index_in_seq, index_in_seq2, sequence):
+        if self.memory_is_enough:
+            # pc_np1 = self.pc[sequence][index_in_seq]
+            # lrf1 = self.lrf[sequence][index_in_seq]
+
+            # pc_np1 = pc_np1.reshape((-1, 37))
+            # kp1 = pc_np1[:, :3]
+            # lrf1 = lrf1.reshape((-1,9))
+            # x1 = lrf1[:,:3]
+            # y1 = lrf1[:,3:6]
+            # z1 = lrf1[:,6:9]
+            # lrf1 = np.stack((x1,y1,z1),axis=2)
+            # score1 = pc_np1[:, 3]
+            # descs1 = pc_np1[:, 4:]
+            # # pose1 = dataset.poses[index_in_seq]
+            # pose1 = self.pose[sequence][index_in_seq] 
+
+            # pc_np2 = self.pc[sequence][index_in_seq2]
+            # lrf2 = self.lrf[sequence][index_in_seq2]
+
+            # pc_np2 = pc_np2.reshape((-1, 37))
+            # kp2 = pc_np2[:, :3]
+            # lrf2 = lrf2.reshape((-1,9))
+            # x2 = lrf2[:,:3]
+            # y2 = lrf2[:,3:6]
+            # z2 = lrf2[:,6:9]
+            # lrf2 = np.stack((x2,y2,z2),axis=2)
+            # score2 = pc_np2[:, 3]
+            # descs2 = pc_np2[:, 4:]
+            # # pose2 = dataset.poses[index_in_seq2]
+            # pose2 = self.pose[sequence][index_in_seq2]
+
+            # T_cam0_velo = self.calib[sequence]
+
+            # # if pc_np2.shape[0]==256 or pc_np1.shape[0]==256:
+            # #     print('1')
+
+            # # q = np.asarray([rot[3], rot[0], rot[1], rot[2]])
+            # # t = np.asarray(trans)
+            # # relative_pose = RigidTransform(q, t)
+
+
+            pc_np1 = self.pc[sequence][index_in_seq]
+            pc1 = pc_np1.reshape((-1, 4))
+            pose1 = self.pose[sequence][index_in_seq] 
+
+            pc_np2 = self.pc[sequence][index_in_seq2]
+            pc2 = pc_np2.reshape((-1, 4))
+            pose2 = self.pose[sequence][index_in_seq2]
+
+            T_cam0_velo = self.calib[sequence]
+        else:
+            pc_np_file1 = os.path.join(self.train_path, self.points_path, sequence, '%06d.bin' % (index_in_seq))
+            # dtype=np.float32应与特征点保存的格式相同，否则会出现（如double）256个特征点变成128个乱码特征点的情况
+            pc_np1 = np.fromfile(pc_np_file1, dtype=np.float32)
+            # pc1 = pc_np1.reshape((-1, 4))
+            pc1 = pc_np1.reshape((-1, 8))[:,:4]
+            pc1 = torch.tensor(pc1, dtype=torch.float)
+
+            pc_np_file2 = os.path.join(self.train_path, self.points_path, sequence, '%06d.bin' % (index_in_seq2))
+            pc_np2 = np.fromfile(pc_np_file2, dtype=np.float32)
+            # pc2 = pc_np2.reshape((-1, 4))
+            pc2 = pc_np2.reshape((-1, 8))[:,:4]
+            pc2 = torch.tensor(pc2, dtype=torch.float)
+
+            kp_np_file1 = os.path.join(self.train_path,'fps', sequence, '%06d.bin' % (index_in_seq))
+            kp_np1 = np.fromfile(kp_np_file1, dtype=np.float32)
+            kp1s = kp_np1.reshape((-1, 4))
+            kp1s = torch.tensor(kp1s, dtype=torch.float)
+
+            kp_np_file1 = os.path.join(self.train_path,'fps', sequence, '%06d.bin' % (index_in_seq2))
+            kp_np1 = np.fromfile(kp_np_file1, dtype=np.float32)
+            kp2s = kp_np1.reshape((-1, 4))
+            kp2s = torch.tensor(kp2s, dtype=torch.float)
+
+            pose1 = self.pose[sequence][index_in_seq]
+            pose2 = self.pose[sequence][index_in_seq2]
+            T_cam0_velo = self.calib[sequence]
+
+            
+
+        return pc1, pc2, kp1s, kp2s, pose1, pose2, T_cam0_velo
+    
+    def FPS(self, pc, device):
+        keypoints = {}
+
+        # xyz = raw_points[:,:3]
+        # xyz_batch_cnt = xyz.new_zeros(batch_size).int()
+        # for bs_idx in range(batch_size):
+        #     xyz_batch_cnt[bs_idx] = (raw_points[:, -1] == bs_idx).sum()
+
+        # if self.mode == 'train' or self.mode == 'val':
+        #     '''Use pre-extracted key point'''
+        #     kp_np_file1 = os.path.join(self.train_path,'fps', sequence, '%06d.bin' % (index_in_seq))
+        #     kp_np1 = np.fromfile(kp_np_file1, dtype=np.float32)
+        #     kp1 = kp_np1.reshape((-1, 4))
+
+        #     kp_np_file2 = os.path.join(self.train_path,'fps', sequence, '%06d.bin' % (index_in_seq2))
+        #     kp_np2 = np.fromfile(kp_np_file2, dtype=np.float32)
+        #     kp2 = kp_np2.reshape((-1, 4))
+
+        #     kp1 = torch.tensor(kp1, dtype=torch.float, device=device)
+        #     kp2 = torch.tensor(kp2, dtype=torch.float, device=device)
+        # elif self.mode == 'test':
+        '''FPS the key point in real-time'''
+        cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
+            pc.contiguous(), 2048
+        ).long()
+
+        kp = pc[0, cur_pt_idxs, :]
+
+        return kp
+
     def __getitem__(self, idx):
 
-        device = torch.device('cuda:0')
+        device = torch.device('cpu')
        
         begin = time.time()
 
         # idx = 216
         index_in_seq = self.dataset[idx]['anc_idx']
         index_in_seq2 = self.dataset[idx]['pos_idx']
+        # index_in_seq2 = index_in_seq+10
         seq = self.dataset[idx]['seq']
+        sequence = sequence = '%02d'%seq
 
         ## test for repeatablity
         # index_in_seq = 2517
@@ -368,276 +538,215 @@ class SparseDataset(Dataset):
 
         preparetime = time.time()
 
-        if self.memory_is_enough:
-            sequence = sequence = '%02d'%seq
-            pc_np1 = self.pc[sequence][index_in_seq]
-            lrf1 = self.lrf[sequence][index_in_seq]
-            if self.keypoints == 'sharp' or self.keypoints == 'lessharp':
-                pc_np1 = pc_np1.reshape((-1, 4))
-                pc_np1 = pc_np1[np.argsort(pc_np1[:, 3])[::-1]]  
-                kp1 = pc_np1[:, :3]
-                kp1 = kp1[:, [2,0,1]] # curvature
-            else:
-                pc_np1 = pc_np1.reshape((-1, 37))
-                kp1 = pc_np1[:, :3]
-                lrf1 = lrf1.reshape((-1,9))
-                x1 = lrf1[:,:3]
-                y1 = lrf1[:,3:6]
-                z1 = lrf1[:,6:9]
-                lrf1 = np.stack((x1,y1,z1),axis=2)
-            score1 = pc_np1[:, 3]
-            descs1 = pc_np1[:, 4:]
-            # pose1 = dataset.poses[index_in_seq]
-            pose1 = self.pose[sequence][index_in_seq] 
+        pc1, pc2, kp1, kp2, pose1, pose2, T_cam0_velo = self.get_point_cloud(index_in_seq, index_in_seq2, sequence)    
+        rd_pc1 = pc1[np.random.choice(pc1.shape[0], self.random_sample_num, replace=False), :]
+        rd_pc2 = pc2[np.random.choice(pc2.shape[0], self.random_sample_num, replace=False), :]    
 
-            pc_np2 = self.pc[sequence][index_in_seq2]
-            lrf2 = self.lrf[sequence][index_in_seq2]
-            if self.keypoints == 'sharp' or self.keypoints == 'lessharp':
-                pc_np2 = pc_np2.reshape((-1, 4))
-                pc_np2 = pc_np2[np.argsort(pc_np2[:, 3])[::-1]]
-                kp2 = pc_np2[:, :3]
-                kp2 = kp2[:, [2,0,1]] # curvature
-                
-            else:
-                pc_np2 = pc_np2.reshape((-1, 37))
-                kp2 = pc_np2[:, :3]
-                lrf2 = lrf2.reshape((-1,9))
-                x2 = lrf2[:,:3]
-                y2 = lrf2[:,3:6]
-                z2 = lrf2[:,6:9]
-                lrf2 = np.stack((x2,y2,z2),axis=2)
-            score2 = pc_np2[:, 3]
-            descs2 = pc_np2[:, 4:]
-            # pose2 = dataset.poses[index_in_seq2]
-            pose2 = self.pose[sequence][index_in_seq2]
+        # kp1 = self.FPS(pc1[None], device)
+        # kp2 = self.FPS(pc2[None], device)
 
-            T_cam0_velo = self.calib[sequence]
-
-            # if pc_np2.shape[0]==256 or pc_np1.shape[0]==256:
-            #     print('1')
-
-            # q = np.asarray([rot[3], rot[0], rot[1], rot[2]])
-            # t = np.asarray(trans)
-            # relative_pose = RigidTransform(q, t)
-        else:
-            sequence = '%02d'%seq
-
-            pc_np_file1 = os.path.join(self.train_path,'remove_outlier', sequence, '%06d.bin' % (index_in_seq))
-            # dtype=np.float32应与特征点保存的格式相同，否则会出现（如double）256个特征点变成128个乱码特征点的情况
-            pc_np1 = np.fromfile(pc_np_file1, dtype=np.float32)
-            pc1 = pc_np1.reshape((-1, 4))
-            pc1 = torch.tensor(pc1, dtype=torch.float)
-
-            pc_np_file2 = os.path.join(self.train_path,'remove_outlier', sequence, '%06d.bin' % (index_in_seq2))
-            pc_np2 = np.fromfile(pc_np_file2, dtype=np.float32)
-            pc2 = pc_np2.reshape((-1, 4))
-            pc2 = torch.tensor(pc2, dtype=torch.float)
-
-            pose1 = self.pose[sequence][index_in_seq]
-            pose2 = self.pose[sequence][index_in_seq2]
-            T_cam0_velo = self.calib[sequence]
-
-            '''FPS'''
-            if self.mode == 'train' or self.mode == 'val':
-                '''Use pre-extracted key point'''
-                kp_np_file1 = os.path.join(self.train_path,'fps', sequence, '%06d.bin' % (index_in_seq))
-                kp_np1 = np.fromfile(kp_np_file1, dtype=np.float32)
-                kp1 = kp_np1.reshape((-1, 4))
-
-                kp_np_file2 = os.path.join(self.train_path,'fps', sequence, '%06d.bin' % (index_in_seq2))
-                kp_np2 = np.fromfile(kp_np_file2, dtype=np.float32)
-                kp2 = kp_np2.reshape((-1, 4))
-
-                kp1 = torch.tensor(kp1, dtype=torch.float, device=device)
-                kp2 = torch.tensor(kp2, dtype=torch.float, device=device)
-            elif self.mode == 'test':
-                '''FPS the key point in real-time'''
-                cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
-                    pc1[None,:,:3].contiguous(), 2048
-                ).long()[0]
-                kp1 = pc1[cur_pt_idxs,:]
-
-                cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
-                    pc2[None,:,:3].contiguous(), 2048
-                ).long()[0]
-                kp2 = pc2[cur_pt_idxs,:]
-
-        '''PointToVoxel'''
-        voxels1, v_coordinates1, v_num_points1 = self.transform_points_to_voxels(pc1)
-        voxels2, v_coordinates2, v_num_points2 = self.transform_points_to_voxels(pc2)
-
-        vis_pointcloud = False
-        if vis_pointcloud:
-            # 显示预处理后的原始点云
-
-            voxels = voxels1
-            coordinates = v_coordinates1
-            num_points = v_num_points1
-
-            apoints = voxels.sum(1)/num_points[:,None]
-
-            point_cloud_o3d3 = o3d.geometry.PointCloud()
-            point_cloud_o3d3.points = o3d.utility.Vector3dVector(kp1[:, :3].cpu().numpy())
-            point_cloud_o3d3.translate(np.asarray([0, 240, 0]))
-
-            point_cloud_o3d2 = o3d.geometry.PointCloud()
-            point_cloud_o3d2.points = o3d.utility.Vector3dVector(apoints[:,:3].cpu().numpy())
-            point_cloud_o3d2.translate(np.asarray([0, 120, 0]))
-
-            point_cloud_o3d = o3d.geometry.PointCloud()
-            point_cloud_o3d.points = o3d.utility.Vector3dVector(pc1[:, :3].cpu().numpy())
-            # point_cloud_o3d.normals = o3d.utility.Vector3dVector(pc1[:, 3:6])
-            o3d.visualization.draw_geometries([point_cloud_o3d+point_cloud_o3d2+point_cloud_o3d3])
-
-        vis_keypoints = False
-        if vis_keypoints:
-            # 显示特征点
-            # pc1 = pc1.reshape((-1, 8))
-            pc3_path = os.path.join(self.preprocessed_path, sequence, '%06d.bin'%(index_in_seq2))
-            pc2_path = os.path.join(self.train_path, 'kitti_randomsample_16384_n8',sequence, '%06d.bin'%(index_in_seq2))
-            pc2 = np.fromfile(pc2_path, dtype=np.float32)
-            pc2 = pc2.reshape((-1, 8))
-            pc3 = np.fromfile(pc3_path, dtype=np.float32)
-            pc3 = pc3.reshape((-1, 8))
-            # pc2 = pc2.reshape((-1, 4))
-            point_cloud_o3d = o3d.geometry.PointCloud()
-            point_cloud_o3d.points = o3d.utility.Vector3dVector(pc2[:, :3])
-            point_cloud_o3d2 = o3d.geometry.PointCloud()
-            point_cloud_o3d2.points = o3d.utility.Vector3dVector(kp2[:, :3])
-            point_cloud_o3d3 = o3d.geometry.PointCloud()
-            point_cloud_o3d3.points = o3d.utility.Vector3dVector(pc3[:, :3]+[150,0,0])
-            point_cloud_o3d2.paint_uniform_color([1, 0, 0])
-            point_cloud_o3d.paint_uniform_color([0, 0, 0])
-            point_cloud_o3d3.paint_uniform_color([0, 0, 0])
-
-            o3d.visualization.draw_geometries([point_cloud_o3d, point_cloud_o3d2, point_cloud_o3d3])
-        
-        readtime = time.time()
-
-        '''Calculate Ground True Matches'''
-        ones = torch.ones(2048, device=device)
-        kp1h = torch.cat((kp1[:,:3], ones[:,None]), dim=1)
-        kp2h = torch.cat((kp2[:,:3], ones[:,None]), dim=1)
-
-        vis_registered_pointcloud = False
-        vis_registered_keypoints = False
-        if vis_registered_pointcloud:
-            # pc1_path = os.path.join(self.preprocessed_path, sequence, '%06d.bin'%index_in_seq)
-            # pc1 = np.fromfile(pc1_path, dtype=np.float32)
-            # pc1 = pc1.reshape((-1, 8))
-            # pc2_path = os.path.join(self.preprocessed_path, sequence, '%06d.bin'%index_in_seq2)
-            # pc2 = np.fromfile(pc2_path, dtype=np.float32)
-            # pc2 = pc2.reshape((-1, 8))
-
-            pc_file1 = os.path.join(self.train_path, 'kitti_randomsample_16384_n8', sequence, '%06d.bin' % index_in_seq)
-            pc_file2 = os.path.join(self.train_path, 'kitti_randomsample_16384_n8', sequence, '%06d.bin' % index_in_seq2)
-            pc1 = np.fromfile(pc_file1, dtype=np.float32)
-            pc2 = np.fromfile(pc_file2, dtype=np.float32)
-            pc1 = pc1.reshape((-1, 8))
-            pc2 = pc2.reshape((-1, 8))
-
-            kp1 = np.array([(kp[0], kp[1], kp[2], 1) for kp in pc1]) # maybe coordinates pt has 3 dimentions; kp1_np.shape=(50,)
-            kp2 = np.array([(kp[0], kp[1], kp[2], 1) for kp in pc2])
-
+        '''Calculate Ground True Pose'''
         pose1 = torch.tensor(pose1, dtype=torch.float, device=device)
         pose2 = torch.tensor(pose2, dtype=torch.float, device=device)
         T_cam0_velo = torch.tensor(T_cam0_velo, dtype=torch.float, device=device)
+        T_gt = torch.einsum('ab,bc,cd,de->ae', torch.inverse(T_cam0_velo), torch.inverse(pose1), pose2, T_cam0_velo) # T_gt: transpose kp2 to kp1
 
-        # pose是cam0的轨迹真值，需将其转换到velodyne坐标系
-        kp1w = torch.einsum('ki,ij,jm->mk', pose1, T_cam0_velo, kp1h.T)
-        kp2w = torch.einsum('ki,ij,jm->mk', pose2, T_cam0_velo, kp2h.T)
+        if True:
+            '''FPS'''
+            # if self.mode == 'train' or self.mode == 'val':
+            #     '''Use pre-extracted key point'''
+            #     kp_np_file1 = os.path.join(self.train_path,'fps', sequence, '%06d.bin' % (index_in_seq))
+            #     kp_np1 = np.fromfile(kp_np_file1, dtype=np.float32)
+            #     kp1 = kp_np1.reshape((-1, 4))
 
-        kp1w = kp1w[:, :3]
-        kp2w = kp2w[:, :3]
-        transtime = time.time()
+            #     kp_np_file2 = os.path.join(self.train_path,'fps', sequence, '%06d.bin' % (index_in_seq2))
+            #     kp_np2 = np.fromfile(kp_np_file2, dtype=np.float32)
+            #     kp2 = kp_np2.reshape((-1, 4))
 
-        if vis_registered_keypoints or vis_registered_pointcloud:
-            # 可视化，校准后的特征点
-            point_cloud_o3d = o3d.geometry.PointCloud()
-            point_cloud_o3d.points = o3d.utility.Vector3dVector(kp1w_np.numpy())
-            point_cloud_o3d.paint_uniform_color([0, 1, 0])
-            point_cloud_o3d2 = o3d.geometry.PointCloud()
-            point_cloud_o3d2.points = o3d.utility.Vector3dVector(kp2w_np.numpy())
-            point_cloud_o3d2.paint_uniform_color([1, 0, 0])
-            o3d.visualization.draw_geometries([point_cloud_o3d, point_cloud_o3d2])
+            #     kp1 = torch.tensor(kp1, dtype=torch.float, device=device)
+            #     kp2 = torch.tensor(kp2, dtype=torch.float, device=device)
+            # elif self.mode == 'test':
+            #     '''FPS the key point in real-time'''
+            #     cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
+            #         pc1[None,:,:3].contiguous(), 2048
+            #     ).long()[0]
+            #     kp1 = pc1[cur_pt_idxs,:]
 
-        # 计算距离
-        dists = cdist(kp1w.cpu(), kp2w.cpu())
+            #     cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
+            #         pc2[None,:,:3].contiguous(), 2048
+            #     ).long()[0]
+            #     kp2 = pc2[cur_pt_idxs,:]
 
-        min1 = np.argmin(dists, axis=0)
-        min2 = np.argmin(dists, axis=1)
+            '''PointToVoxel'''
+            # voxels1, v_coordinates1, v_num_points1 = self.transform_points_to_voxels(pc1)
+            # voxels2, v_coordinates2, v_num_points2 = self.transform_points_to_voxels(pc2)
 
-        min1v = np.min(dists, axis=1)
-        min1f = min2[min1v < self.threshold]
+            vis_pointcloud = False
+            if vis_pointcloud:
+                # 显示预处理后的原始点云
 
-        # 用于计算repeatibility
-        rep = len(min1f)
+                voxels = voxels1
+                coordinates = v_coordinates1
+                num_points = v_num_points1
 
-        match1, match2 = -1 * np.ones((len(kp1)), dtype=np.int16), -1 * np.ones((len(kp2)), dtype=np.int16)
-        if self.mutual_check:
-            # 距离kp1最近的点是kp2，距离kp2最近的点也是kp1
-            xx = np.where(min2[min1] == np.arange(min1.shape[0]))[0]
-            # 返回两个数组中共同的元素
-            matches = np.intersect1d(min1f, xx)
+                apoints = voxels.sum(1)/num_points[:,None]
 
-            # setdiff1d返回数组1中2没有的元素
-            # missing1 = np.setdiff1d(np.arange(kp1_np.shape[0]), min1[matches])
-            # missing2 = np.setdiff1d(np.arange(kp2_np.shape[0]), matches)
+                point_cloud_o3d3 = o3d.geometry.PointCloud()
+                point_cloud_o3d3.points = o3d.utility.Vector3dVector(kp1[:, :3].cpu().numpy())
+                point_cloud_o3d3.translate(np.asarray([0, 240, 0]))
 
-            # match1, match2 = -1 * np.ones((len(kp1)), dtype=np.int16), -1 * np.ones((len(kp2)), dtype=np.int16)
-            match1[min1[matches]] = matches
-            match2[matches] = min1[matches]
-        else:
-            match1[min1v < self.threshold] = min1f
+                point_cloud_o3d2 = o3d.geometry.PointCloud()
+                point_cloud_o3d2.points = o3d.utility.Vector3dVector(apoints[:,:3].cpu().numpy())
+                point_cloud_o3d2.translate(np.asarray([0, 120, 0]))
 
-            min2v = np.min(dists, axis=0)
-            min2f = min1[min2v < self.threshold]
-            match2[min2v < self.threshold] = min2f
+                point_cloud_o3d = o3d.geometry.PointCloud()
+                point_cloud_o3d.points = o3d.utility.Vector3dVector(pc1[:, :3].cpu().numpy())
+                # point_cloud_o3d.normals = o3d.utility.Vector3dVector(pc1[:, 3:6])
+                o3d.visualization.draw_geometries([point_cloud_o3d+point_cloud_o3d2+point_cloud_o3d3])
 
-        gttime = time.time()
+            vis_keypoints = False
+            if vis_keypoints:
+                # 显示特征点
+                # pc1 = pc1.reshape((-1, 8))
+                pc3_path = os.path.join(self.preprocessed_path, sequence, '%06d.bin'%(index_in_seq2))
+                pc2_path = os.path.join(self.train_path, 'kitti_randomsample_16384_n8',sequence, '%06d.bin'%(index_in_seq2))
+                pc2 = np.fromfile(pc2_path, dtype=np.float32)
+                pc2 = pc2.reshape((-1, 8))
+                pc3 = np.fromfile(pc3_path, dtype=np.float32)
+                pc3 = pc3.reshape((-1, 8))
+                # pc2 = pc2.reshape((-1, 4))
+                point_cloud_o3d = o3d.geometry.PointCloud()
+                point_cloud_o3d.points = o3d.utility.Vector3dVector(pc2[:, :3])
+                point_cloud_o3d2 = o3d.geometry.PointCloud()
+                point_cloud_o3d2.points = o3d.utility.Vector3dVector(kp2[:, :3])
+                point_cloud_o3d3 = o3d.geometry.PointCloud()
+                point_cloud_o3d3.points = o3d.utility.Vector3dVector(pc3[:, :3]+[150,0,0])
+                point_cloud_o3d2.paint_uniform_color([1, 0, 0])
+                point_cloud_o3d.paint_uniform_color([0, 0, 0])
+                point_cloud_o3d3.paint_uniform_color([0, 0, 0])
 
-        
+                o3d.visualization.draw_geometries([point_cloud_o3d, point_cloud_o3d2, point_cloud_o3d3])
+            
+            readtime = time.time()
 
-        ''' augment training data with random rotation'''
-        if self.RotAug == True:
-            theta=np.random.rand(1)*2*np.pi#0到2*pi的均匀分布
-            R_z = np.array([[math.cos(theta),    -math.sin(theta),    0],
-                    [math.sin(theta),    math.cos(theta),     0],
-                    [0,                     0,                      1]
-                    ])
-            Rt_z = np.array([[math.cos(theta),    -math.sin(theta),    0, 0],
-                    [math.sin(theta),    math.cos(theta),     0, 0],
-                    [0,                     0,                      1, 0],
-                    [0,0,0,1]
-                    ])
-            R_z = torch.tensor(R_z, dtype=torch.float, device=device)
-            Rt_z = torch.tensor(Rt_z, dtype=torch.float, device=device)
-            r_kp1 = torch.einsum('ki,ji->jk', R_z, kp1[:, :3])
-            kp1 = torch.cat((r_kp1,kp1[:,3][:,None]), dim=1)
-        else:
-            Rt_z = np.array([[1, 0, 0, 0],
-                            [0, 1,  0, 0],
-                            [0, 0,  1, 0],
-                            [0, 0,  0,  1]
-                            ])
-            Rt_z = torch.tensor(Rt_z, dtype=torch.float, device=device)
+            
+            '''Calculate Ground True Matches'''
+            vis_registered_pointcloud = False
+            vis_registered_keypoints = False
+            if vis_registered_pointcloud:
+                # pc1_path = os.path.join(self.preprocessed_path, sequence, '%06d.bin'%index_in_seq)
+                # pc1 = np.fromfile(pc1_path, dtype=np.float32)
+                # pc1 = pc1.reshape((-1, 8))
+                # pc2_path = os.path.join(self.preprocessed_path, sequence, '%06d.bin'%index_in_seq2)
+                # pc2 = np.fromfile(pc2_path, dtype=np.float32)
+                # pc2 = pc2.reshape((-1, 8))
 
+                pc_file1 = os.path.join(self.train_path, 'kitti_randomsample_16384_n8', sequence, '%06d.bin' % index_in_seq)
+                pc_file2 = os.path.join(self.train_path, 'kitti_randomsample_16384_n8', sequence, '%06d.bin' % index_in_seq2)
+                pc1 = np.fromfile(pc_file1, dtype=np.float32)
+                pc2 = np.fromfile(pc_file2, dtype=np.float32)
+                pc1 = pc1.reshape((-1, 8))
+                pc2 = pc2.reshape((-1, 8))
+
+                kp1 = np.array([(kp[0], kp[1], kp[2], 1) for kp in pc1]) # maybe coordinates pt has 3 dimentions; kp1_np.shape=(50,)
+                kp2 = np.array([(kp[0], kp[1], kp[2], 1) for kp in pc2])
+            
+            ones = torch.ones(2048, device=device)
+            kp1h = torch.cat((kp1[:,:3], ones[:,None]), dim=1)
+            kp2h = torch.cat((kp2[:,:3], ones[:,None]), dim=1)
+            kp1w = torch.einsum('ki,ij,jm->mk', pose1, T_cam0_velo, kp1h.T)
+            kp2w = torch.einsum('ki,ij,jm->mk', pose2, T_cam0_velo, kp2h.T)
+            kp1w = kp1w[:, :3]
+            kp2w = kp2w[:, :3]
+            transtime = time.time()
+
+            if vis_registered_keypoints or vis_registered_pointcloud:
+                # 可视化，校准后的特征点
+                point_cloud_o3d = o3d.geometry.PointCloud()
+                point_cloud_o3d.points = o3d.utility.Vector3dVector(kp1w_np.numpy())
+                point_cloud_o3d.paint_uniform_color([0, 1, 0])
+                point_cloud_o3d2 = o3d.geometry.PointCloud()
+                point_cloud_o3d2.points = o3d.utility.Vector3dVector(kp2w_np.numpy())
+                point_cloud_o3d2.paint_uniform_color([1, 0, 0])
+                o3d.visualization.draw_geometries([point_cloud_o3d, point_cloud_o3d2])
+
+            # 计算距离
+            dists = cdist(kp1w.cpu(), kp2w.cpu())
+            min1 = np.argmin(dists, axis=0)
+            min2 = np.argmin(dists, axis=1)
+            min1v = np.min(dists, axis=1)
+            min1f = min2[min1v < self.threshold]
+
+            # 用于计算repeatibility
+            rep = len(min1f)
+
+            match1, match2 = -1 * np.ones((len(kp1)), dtype=np.int16), -1 * np.ones((len(kp2)), dtype=np.int16)
+            if self.mutual_check:
+                # 距离kp1最近的点是kp2，距离kp2最近的点也是kp1
+                xx = np.where(min2[min1] == np.arange(min1.shape[0]))[0]
+                # 返回两个数组中共同的元素
+                matches = np.intersect1d(min1f, xx)
+
+                # setdiff1d返回数组1中2没有的元素
+                # missing1 = np.setdiff1d(np.arange(kp1_np.shape[0]), min1[matches])
+                # missing2 = np.setdiff1d(np.arange(kp2_np.shape[0]), matches)
+
+                # match1, match2 = -1 * np.ones((len(kp1)), dtype=np.int16), -1 * np.ones((len(kp2)), dtype=np.int16)
+                match1[min1[matches]] = matches
+                match2[matches] = min1[matches]
+            else:
+                match1[min1v < self.threshold] = min1f
+
+                min2v = np.min(dists, axis=0)
+                min2f = min1[min2v < self.threshold]
+                match2[min2v < self.threshold] = min2f
+
+            gttime = time.time()
+
+            ''' augment training data with random rotation'''
+            if self.RotAug == True:
+                theta=np.random.rand(1)*2*np.pi#0到2*pi的均匀分布
+                R_z = np.array([[math.cos(theta),    -math.sin(theta),    0],
+                        [math.sin(theta),    math.cos(theta),     0],
+                        [0,                     0,                      1]
+                        ])
+                Rt_z = np.array([[math.cos(theta),    -math.sin(theta),    0, 0],
+                        [math.sin(theta),    math.cos(theta),     0, 0],
+                        [0,                     0,                      1, 0],
+                        [0,0,0,1]
+                        ])
+                R_z = torch.tensor(R_z, dtype=torch.float, device=device)
+                # Rt_z = torch.tensor(Rt_z, dtype=torch.float, device=device)
+                r_kp1 = torch.einsum('ki,ji->jk', R_z, kp1[:, :3])
+                kp1 = torch.cat((r_kp1,kp1[:,3][:,None]), dim=1)
+            else:
+                Rt_z = np.array([[1, 0, 0, 0],
+                                [0, 1,  0, 0],
+                                [0, 0,  1, 0],
+                                [0, 0,  0,  1]
+                                ])
+                Rt_z = torch.tensor(Rt_z, dtype=torch.float, device=device)
 
         backendtime = time.time()
         
         # print('preparetime {}, readtime {}, transtime: {}, gttime: {}, backendtime: {}' 
                         # .format(preparetime-begin, readtime-preparetime, transtime-readtime, gttime-transtime, backendtime-gttime)) 
 
-        return{
+        batch_dict = {
             # 'skip': False,
-            'keypoints0': kp1.cpu(),
-            'keypoints1': kp2.cpu(),
-            'voxels0': voxels1,
-            'voxels1': voxels2,
-            'voxel_coords0': v_coordinates1,
-            'voxel_coords1': v_coordinates2,
-            'voxel_num_points0': v_num_points1,
-            'voxel_num_points1': v_num_points2,
+            'pc0': pc1,
+            'pc1': pc2,
+            'rd_pc0': rd_pc1,
+            'rd_pc1': rd_pc2,
+            'keypoints0': kp1,
+            'keypoints1': kp2,
+
+            # 'voxels0': voxels1,
+            # 'voxels1': voxels2,
+            # 'voxel_coords0': v_coordinates1,
+            # 'voxel_coords1': v_coordinates2,
+            # 'voxel_num_points0': v_num_points1,
+            # 'voxel_num_points1': v_num_points2,
             'match0': match1,
             'match1': match2,
             'sequence': sequence,
@@ -646,9 +755,49 @@ class SparseDataset(Dataset):
             # 'repeat': min1f
             # 'all_matches': list(all_matches),
             # 'file_name': file_name
-            'rep': rep,
-            'Rt_z': Rt_z.cpu()
+            # 'rep': rep,
+            # 'Rt_z': Rt_z,
+            'T_gt': T_gt
         }
+
+        # batch_dict = self.Padding(batch_dict)
+        
+        return batch_dict
+
+    @staticmethod
+    def collate_batch(batch_list, _unused=False):
+        '''
+        Bug in deviding data when use multiple gpus.
+        '''
+        data_dict = defaultdict(list)
+        for cur_sample in batch_list:
+            for key, val in cur_sample.items():
+                data_dict[key].append(val)
+
+        for key, val in data_dict.items():
+            if key in ['voxels0', 'voxels1', 'voxel_num_points0', 'voxel_num_points1']:
+                coors = []
+                for i, coor in enumerate(val):
+                    coors.append(coor)
+                data_dict[key] = torch.cat(coors,dim=0)
+                # batch = val.size()[0]
+                # batch_dict[key] = val.view(-1, m, d)
+                # ret[key] = np.concatenate(val, axis=0)
+            elif key in ['pc0', 'pc1', 'voxel_coords0', 'voxel_coords1']:
+                coors = []
+                for i, coor in enumerate(val):
+                    '''[batch, n, dim]  -->  [n, 1+dim] (x, y, z, batch_idx)'''
+                    from torch import nn
+                    pad = nn.ConstantPad2d((0,1,0,0),i)
+                    coor_pad = pad(coor)
+                    # coor_pad = np.pad(coor, ((0, 0), (1, 0)), mode='constant', constant_values=i)
+                    coors.append(coor_pad)
+                data_dict[key] = torch.cat(coors,dim=0)
+            else:
+                data_dict[key] = np.stack(val, axis=0)
+
+        batch_size = len(batch_list)
+        return data_dict
   
             
 

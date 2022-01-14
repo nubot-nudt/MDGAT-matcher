@@ -62,7 +62,26 @@ def mask_points_by_range(points, limit_range):
     return mask
 
 
-def get_voxel_centers(voxel_coords, downsample_times, voxel_size, point_cloud_range):
+# def get_voxel_centers(voxel_coords, downsample_times, voxel_size, point_cloud_range, device):
+#     """
+#     Args:
+#         voxel_coords: (N, 3)
+#         downsample_times:
+#         voxel_size:
+#         point_cloud_range:
+
+#     Returns:
+
+#     """
+#     assert voxel_coords.shape[1] == 3
+#     voxel_centers = voxel_coords[:, [2, 1, 0]].float()  # (xyz)
+#     voxel_size = torch.tensor(voxel_size, device=voxel_centers.device).float() * downsample_times
+#     pc_range = torch.tensor(point_cloud_range[0:3], device=voxel_centers.device).float()
+#     voxel_centers = (voxel_centers + 0.5) * voxel_size + pc_range
+#     voxel_centers = voxel_centers.to(device)
+#     return voxel_centers
+
+def get_voxel_centers(voxel_coords, downsample_times, voxel_size, point_cloud_range, device):
     """
     Args:
         voxel_coords: (N, 3)
@@ -78,6 +97,7 @@ def get_voxel_centers(voxel_coords, downsample_times, voxel_size, point_cloud_ra
     voxel_size = torch.tensor(voxel_size, device=voxel_centers.device).float() * downsample_times
     pc_range = torch.tensor(point_cloud_range[0:3], device=voxel_centers.device).float()
     voxel_centers = (voxel_centers + 0.5) * voxel_size + pc_range
+    voxel_centers = voxel_centers.to(device)
     return voxel_centers
 
 

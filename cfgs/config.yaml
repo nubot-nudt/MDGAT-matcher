@@ -91,7 +91,7 @@ MODEL:
         NUM_OUTPUT_FEATURES: 128
         SAMPLE_METHOD: FPS
 
-        FEATURES_SOURCE: ['bev', 'x_conv1', 'x_conv2', 'x_conv3', 'x_conv4', 'raw_points']
+        FEATURES_SOURCE: []
         SA_LAYER:
             raw_points:
                 MLPS: [[16, 16], [16, 16]]

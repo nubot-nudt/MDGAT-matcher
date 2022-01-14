@@ -154,6 +154,40 @@ class QueryAndGroup(nn.Module):
 
         return new_features, idx
 
+class QueryAndGroup2(nn.Module):
+    def __init__(self, radius: float, nsample: int, use_xyz: bool = True):
+        """
+        Args:
+            radius: float, radius of ball
+            nsample: int, maximum number of features to gather in the ball
+            use_xyz:
+        """
+        super().__init__()
+        self.radius, self.nsample, self.use_xyz = radius, nsample, use_xyz
+
+    def forward(self, xyz: torch.Tensor, xyz_batch_cnt: torch.Tensor,
+                new_xyz: torch.Tensor, new_xyz_batch_cnt: torch.Tensor):
+        """
+        Args:
+            xyz: (N1 + N2 ..., 3) xyz coordinates of the features
+            xyz_batch_cnt: (batch_size), [N1, N2, ...]
+            new_xyz: (M1 + M2 ..., 3) centers of the ball query
+            new_xyz_batch_cnt: (batch_size), [M1, M2, ...]
+        Returns:
+            new_features: (M1 + M2, 3, nsample) tensor
+        """
+        assert xyz.shape[0] == xyz_batch_cnt.sum(), 'xyz: %s, xyz_batch_cnt: %s' % (str(xyz.shape), str(new_xyz_batch_cnt))
+        assert new_xyz.shape[0] == new_xyz_batch_cnt.sum(), \
+            'new_xyz: %s, new_xyz_batch_cnt: %s' % (str(new_xyz.shape), str(new_xyz_batch_cnt))
+
+        # idx: (M1 + M2 ..., nsample), empty_ball_mask: (M1 + M2 ...)
+        idx, empty_ball_mask = ball_query(self.radius, self.nsample, xyz, xyz_batch_cnt, new_xyz, new_xyz_batch_cnt)
+        grouped_xyz = grouping_operation(xyz, xyz_batch_cnt, idx, new_xyz_batch_cnt)  # (M1 + M2, 3, nsample)
+
+        grouped_xyz[empty_ball_mask] = 0
+
+        return grouped_xyz, idx
+
 
 class FurthestPointSampling(Function):
     @staticmethod
