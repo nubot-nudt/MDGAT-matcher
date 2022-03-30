@@ -435,8 +435,8 @@ class MDGAT(nn.Module):
             scores, self.bin_score,
             iters=self.config['sinkhorn_iterations'])
 
-        gt_matches0 = data['match0']
-        gt_matches1 = data['match1']
+        gt_matches0 = data['gt_matches0']
+        gt_matches1 = data['gt_matches1']
 
         '''Match the keypoints'''
         if self.loss_method == 'superglue':

@@ -7,10 +7,12 @@ from load_data import SparseDataset
 import os
 import torch.multiprocessing
 import time
-from utils.utils_test import (calculate_error, plot_match)
+from utils.utils_test import (calculate_error2, plot_match)
 from models.superglue import SuperGlue
 from models.mdgat import MDGAT
 from scipy.spatial.distance import cdist
+from utils.utils_test import AverageMeter
+
 
 torch.set_grad_enabled(True)
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -180,11 +182,10 @@ if __name__ == '__main__':
                         won’t be able to backprop (which you don’t want in an eval script).
     '''
     with torch.no_grad():
-        mean_test_loss = []; precision_array = []; accuracy_array = []; recall_array = []
-        trans_error_array = []; rot_error_array = []; relative_trans_error_array = []; relative_rot_error_array = []
-        repeatibilty_array = []; valid_num_array = []; all_num_array = []; inlier_array = [] 
-        kpnum_array = []; fp_rate_array = []; tp_rate_array = []; tp_rate2_array = []; inlier_ratio_array= [];tm_a=[];fm_a=[]
-        fail = 0
+        rep_a, rre_a, rte_a = AverageMeter(), AverageMeter(), AverageMeter()
+        inlier_a, inlier_ratio_a, recall_a, tp_rate_a, fp_rate_a = AverageMeter(), AverageMeter(), AverageMeter(), AverageMeter(), AverageMeter()
+        RR = AverageMeter()
+
         baned_data = 0
         
         for i, pred in enumerate(test_loader):
@@ -207,136 +208,81 @@ if __name__ == '__main__':
                 # pc1_path = os.path.join('/home/chenghao/Mount/Dataset/KITTI_odometry/preprocess-undownsample-n8', pred['sequence'][b], '%06d.bin'%pred['idx1'][b])
                 # pc0, pc1 = np.fromfile(pc0_path, dtype=np.float32), np.fromfile(pc1_path, dtype=np.float32)
                 # pc0, pc1 = pc0.reshape(-1, 8), pc1.reshape(-1, 8)
+                
                 pc0, pc1 = [],[]
-
                 kpts0, kpts1 = pred['keypoints0'][b].cpu().numpy(), pred['keypoints1'][b].cpu().numpy()
                 idx = pred['idx0'][b]
                 matches, matches1, conf = pred['matches0'][b].cpu().detach().numpy(), pred['matches1'][b].cpu().detach().numpy(), pred['matching_scores0'][b].cpu().detach().numpy()
                 valid = matches > -1
+
                 mkpts0 = kpts0[valid]
                 mkpts1 = kpts1[matches[valid]]
-
                 mconf = conf[valid]
 
-                mutual0 = np.arange(len(matches))[valid] == matches1[matches[valid]]
-                mutual0 = np.arange(len(matches))[valid][mutual0]
-                mutual1 = matches[mutual0]
-                x = np.ones(len(matches1)) == 1
-                x[mutual1] = False
-                valid1 = matches1 > -1
-                # extrakpt1 = kpts1[valid1 & x]
-                # extrakpt0 = kpts0[matches1[valid1 & x]]
-                # mkpts0 = np.vstack((mkpts0, extrakpt0))
-                # mkpts1 = np.vstack((mkpts1, extrakpt1))
-
-                mconf = conf[valid]
-                # mscores
-
-                ## ground truth ##
                 matches_gt, matches_gt1 = pred['gt_matches0'][b].cpu().detach().numpy(), pred['gt_matches1'][b].cpu().detach().numpy()
                 matches_gt[matches_gt == len(matches_gt1)] = -1
                 matches_gt1[matches_gt1 == len(matches_gt)] = -1
                 valid_gt = matches_gt > -1
 
-                valid_num = np.sum(valid_gt)
-                # valid_num = pred['rep'][b].cpu().detach().numpy()
-                all_num = len(valid_gt)
-                repeatibilty = valid_num/all_num 
-                repeatibilty_array.append(repeatibilty)
+                mkpts0_gt = kpts0[valid_gt]
+                mkpts1_gt = kpts1[matches_gt[valid_gt]]
 
                 if valid_gt.sum() < len(matches_gt)*0.1:
                     # print('not enough ground truth match, ban the pair')
                     baned_data+=1
-                    fail+=1
                     continue
 
-                mkpts0_gt = kpts0[valid_gt]
-                mkpts1_gt = kpts1[matches_gt[valid_gt]]
-                mutual0 = np.arange(len(matches_gt))[valid_gt] == matches_gt1[matches_gt[valid_gt]]
-                # mutual0_inv = 1-mutual0
-                mutual0 = np.arange(len(matches_gt))[valid_gt][mutual0]
-                mutual1 = matches_gt[mutual0]
-                x = np.ones(len(matches_gt1)) == 1
-                x[mutual1] = False               
-                valid_gt1 = matches_gt1 > -1
-                # extrakpt1 = kpts1[valid_gt1 & x]
-                # extrakpt0 = kpts0[matches_gt1[valid_gt1 & x]]
-                # mkpts0_gt = np.vstack((mkpts0_gt, extrakpt0))
-                # mkpts1_gt = np.vstack((mkpts1_gt, extrakpt1))
+                repeatibilty = np.sum(valid_gt)/len(valid_gt)
 
+                ''' calculate false positive ,true positive ,true nagetive, precision, accuracy, recall '''
+                true_positive = (matches>-1) * (matches == matches_gt)
+                false_positive = (matches>-1) * ((matches == matches_gt) == False)
+                true_negativate = (matches==-1) * (matches_gt==-1)
+                false_negativate = (matches==-1) * (matches_gt>-1)
 
-                mscores_gt = pred['scores0'][b].cpu().numpy()[valid_gt]
-                gt_idx = np.arange(len(kpts0))[valid_gt]
-            
+                precision_inlier_ratio = np.sum(true_positive) / np.sum(valid) if np.sum(valid) > 0 else 0
+                recall = np.sum(true_positive) / np.sum(valid_gt) if np.sum(valid) > 0 else 0
+                # accuracy = (np.sum(true_positive) + np.sum(true_negativate))/len(matches_gt)
 
-                if len(mkpts0) < 4:
-                    fail+=1
-                    print('registration fail')
-                else:
-                    ''' calculate false positive ,true positive ,true nagetive, precision, accuracy, recall '''
-                    true_positive = [(matches[i] == matches_gt[i]) and (valid[i]) for i in range(len(kpts0))]
-                    true_negativate = [(matches[i] == matches_gt[i]) and not (valid[i]) for i in range(len(kpts0))]
-                    false_positive = [valid[i] and (matches_gt[i]==-1) for i in range(len(kpts0))]
-                    ckpts0 = kpts0[true_positive]
-                    ckpts1 = [matches[true_positive]]
-                    precision = np.sum(true_positive) / np.sum(valid) if np.sum(valid) > 0 else 0
-                    recall = np.sum(true_positive) / np.sum(valid_gt) if np.sum(valid) > 0 else 0
-                    tm = np.sum(true_positive) 
-                    fm = np.sum(false_positive) 
-                    matching_score = np.sum(true_positive) / len(kpts0) if len(kpts0) > 0 else 0
-                    accuracy = (np.sum(true_positive) + np.sum(true_negativate))/len(matches_gt)
-                    fp_rate = np.sum(false_positive)/np.sum(matches_gt==-1)
-                    tp_rate = np.sum([valid[i] and (matches_gt[i]>-1) for i in range(len(kpts0))])/np.sum(matches_gt > -1)
-                    tp_rate2 = np.sum(true_positive)/np.sum(matches_gt > -1)
-                    
-                    '''calculate pose error, inlier and failure rate'''
-                    if opt.calculate_pose:
-                        T, inlier, inlier_ratio, trans_error, rot_error = calculate_error(mkpts0, mkpts1, pred, b) 
+                fp_rate = np.sum(false_positive)/(np.sum(false_positive)+np.sum(true_negativate))
+                tp_rate = np.sum(true_positive)/(np.sum(true_positive)+np.sum(false_negativate))
 
-                        if trans_error>2 or rot_error>5 or np.isnan(trans_error) or np.isnan(rot_error):
-                            fail+=1
-                            print('registration fail')
-                        else:
-                            precision_array.append(precision)
-                            accuracy_array.append(accuracy)
-                            recall_array.append(recall)
-                            trans_error_array.append(trans_error)
-                            rot_error_array.append(rot_error)
-                            inlier_array.append(inlier)
-                            inlier_ratio_array.append(inlier_ratio)
-                            fp_rate_array.append(fp_rate)
-                            tp_rate_array.append(tp_rate)
-                            tp_rate2_array.append(tp_rate2)
-                            tm_a.append(tm)
-                            fm_a.append(fm)
-                            # else:
-                            #     baned_data+=1
-                            print('idx{}, inlier {}, rep {:.3f}， inlier_ratio {:.3f}, precision {:.3f}, accuracy {:.3f}, recall {:.3f}, fp_rate {:.3f}, tp_rate {:.3f}, trans_error {:.3f}, rot_error {:.3f} '.format(
-                                idx, inlier, repeatibilty,inlier_ratio, precision, accuracy, recall, fp_rate, tp_rate, trans_error, rot_error))
+                rep_a.update(repeatibilty), fp_rate_a.update(fp_rate), tp_rate_a.update(tp_rate)
+                recall_a.update(recall), inlier_ratio_a.update(precision_inlier_ratio), inlier_a.update(np.sum(true_positive))
+
+                '''calculate pose error, inlier and failure rate'''
+                if opt.calculate_pose:
+                    T, rte, rre=\
+                    calculate_error2(mkpts0, mkpts1, b, pred['T_gt'][b])
+
+                    if rte < 2:
+                        rte_a.update(rte)
+
+                    if not np.isnan(rre) and rre < np.pi / 180 * 5:
+                        rre_a.update(rre)
+
+                    if rte < 2 and not np.isnan(rre) and rre < np.pi / 180 * 5:
+                        RR.update(1)
+                        print('idx{}, rep {:.3f}, inlier {}, precision(inlier ratio) {:.3f}, recall {:.3f}, fp_rate {:.3f}, tp_rate {:.3f}, RTE {:.3f}, RRE {:.3f}'.format(
+                            idx, repeatibilty, np.sum(true_positive), precision_inlier_ratio, recall, fp_rate, tp_rate, rte, rre))
                     else:
-                        T=[]
-                        print('idx{}, precision {:.3f}, accuracy {:.3f}, recall {:.3f}, true match {:.3f}, false match {:.3f}, fp_rate {:.3f}, tp_rate {:.3f}'.format(
-                            idx, precision, accuracy, recall,tm,fm, fp_rate, tp_rate))
+                        RR.update(0)
+                        print('idx{}, rep {:.3f}, registration fail'.format(
+                            idx, repeatibilty))
+                else:
+                    T=[]
+                    print('idx{}, rep {:.3f}, inlier {}, precision(inlier ratio) {:.3f}, recall {:.3f}, fp_rate {:.3f}, tp_rate {:.3f}'.format(
+                        idx, repeatibilty, np.sum(true_positive), precision_inlier_ratio, recall, fp_rate, tp_rate))
 
-                    if opt.visualize:
-                        plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, matches, mconf, true_positive, false_positive, T, opt.vis_line_width)
+                if opt.visualize:
+                    plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, matches, mconf, true_positive, false_positive, T, opt.vis_line_width)
 
                     
 
-        precision_mean = np.mean(precision_array)
-        accuracy_mean = np.mean(accuracy_array)
-        recall_mean = np.mean(recall_array)
-        trans_error_mean = np.mean(trans_error_array)
-        rot_error_mean = np.mean(rot_error_array)
-        repeatibilty_array_mean = np.mean(repeatibilty_array)
-        inlier_mean = np.mean(inlier_array)
-        inlier_ratio_mean = np.mean(inlier_ratio_array)
-        fp_rate_mean = np.mean(fp_rate_array)
-        tp_rate_mean = np.mean(tp_rate_array)
-        tp_rate_mean2 = np.mean(tp_rate2_array)
-        tm = np.mean(tm_a)
-        fm = np.mean(fm_a)
-        print('average repeatibility: {:.3f}, inlier_mean {:.3f}, inlier_ratio_mean {:.3f}, fail {:.6f}, precision_mean {:.3f}, accuracy_mean {:.3f}, recall_mean {:.3f}, true match {:.3f}, false match {:.3f}, fp_rate_mean {:.3f}, tp_rate_mean {:.3f}, tp_rate_mean2 {:.3f}, trans_error_mean {:.3f}, rot_error_mean {:.3f} '.format(
-            repeatibilty_array_mean, inlier_mean, inlier_ratio_mean, fail/i, precision_mean, accuracy_mean, recall_mean,tm,fm, fp_rate_mean, tp_rate_mean, tp_rate_mean2, trans_error_mean, rot_error_mean ))
-        # print('valid num {}, all_num {}'.format(valid_num_mean, all_num_mean))
-        print('baned_data {}'.format(baned_data/i))
+        F1 = 2*inlier_ratio_a.avg*recall_a.avg/(inlier_ratio_a.avg+recall_a.avg)
+        print('repeatibility, inlier, RR || precision(inlier ratio), recall, F1 || fp_rate, tp_rate || RTE, RRE')
+        
+        print('{:.3f} {:.1f} {:.3f} || {:.3f} {:.3f}  {:.3f} || {:.3f}  {:.3f} || {:.3f} {:.3f}'.format(
+            rep_a.avg, inlier_a.avg, RR.avg, inlier_ratio_a.avg, recall_a.avg, F1, fp_rate_a.avg, tp_rate_a.avg, rte_a.avg, rre_a.avg))
+      
+

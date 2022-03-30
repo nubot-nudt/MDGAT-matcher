@@ -3,19 +3,54 @@ import open3d as o3d
 import torch
 # import teaserpp_python
 
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
 
-def calculate_error(mkpts0, mkpts1, pred, path, b):
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0.0
+        self.sq_sum = 0.0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+        self.sq_sum += val**2 * n
+        self.var = self.sq_sum / self.count - self.avg**2
+
+def calculate_error2(mkpts0, mkpts1, b, T_gt):
     T = solve_icp(mkpts1, mkpts0)
     # T = solve_teaser(mkpts1, mkpts0)
     T = torch.tensor(T, dtype=torch.double)
-    pose0 = torch.tensor(pred['pose1'][b].cpu().detach().numpy(), dtype=torch.double)
-    pose1 = torch.tensor(pred['pose2'][b].cpu().detach().numpy(), dtype=torch.double)
-    T_cam0_velo = torch.tensor(pred['T_cam0_velo'][b].cpu().detach().numpy(), dtype=torch.double)
-    T_gt = torch.einsum('ab,bc,cd,de->ae', torch.inverse(T_cam0_velo), torch.inverse(pose0), pose1, T_cam0_velo)
-    trans_gt = np.linalg.norm(T_gt[:3, 3])
-    f_theta = (T_gt[0, 0] + T_gt[1, 1] + T_gt[2, 2] -1) * 0.5
-    f_theta = max(min(f_theta, 1), -1)
-    rot_gt = np.arccos(f_theta)
+
+    T_gt = T_gt.cpu().double()
+
+    T_error = torch.einsum('ab,bc->ac', torch.inverse(T), T_gt).numpy()
+    rte = np.linalg.norm(T_error[:3, 3])
+    f_theta = (T_error[0, 0] + T_error[1, 1] + T_error[2, 2] -1) /2
+    # f_theta = max(min(f_theta, 1), -1)  #控制在(-1,1)区间内
+    rre = np.arccos(f_theta)
+    return  T, rte, rre
+
+def calculate_error(mkpts0, mkpts1, pred, b):
+    T = solve_icp(mkpts1, mkpts0)
+    # T = solve_teaser(mkpts1, mkpts0)
+    T = torch.tensor(T, dtype=torch.double)
+    # pose0 = torch.tensor(pred['pose1'][b].cpu().detach().numpy(), dtype=torch.double)
+    # pose1 = torch.tensor(pred['pose2'][b].cpu().detach().numpy(), dtype=torch.double)
+    # T_cam0_velo = torch.tensor(pred['T_cam0_velo'][b].cpu().detach().numpy(), dtype=torch.double)
+    # T_gt = torch.einsum('ab,bc,cd,de->ae', torch.inverse(T_cam0_velo), torch.inverse(pose0), pose1, T_cam0_velo)
+    T_gt = pred['T_gt'][b].cpu().double()
+    # trans_gt = np.linalg.norm(T_gt[:3, 3])
+    # f_theta = (T_gt[0, 0] + T_gt[1, 1] + T_gt[2, 2] -1) * 0.5
+    # f_theta = max(min(f_theta, 1), -1)
+    # rot_gt = np.arccos(f_theta)
 
     kp0_np = np.array([(kp[0], kp[1], kp[2], 1) for kp in mkpts0])
     kp1_np = np.array([(kp[0], kp[1], kp[2], 1) for kp in mkpts1])
@@ -30,12 +65,10 @@ def calculate_error(mkpts0, mkpts1, pred, path, b):
 
     T_error = torch.einsum('ab,bc->ac', torch.inverse(T), T_gt).numpy()
     trans_error = np.linalg.norm(T_error[:3, 3])
-    trans_error_percent = trans_error/trans_gt * 100
     f_theta = (T_error[0, 0] + T_error[1, 1] + T_error[2, 2] -1) * 0.5
-    f_theta = max(min(f_theta, 1), -1)
+    # f_theta = max(min(f_theta, 1), -1)
     rot_error = np.arccos(f_theta)
-    rot_error_percent = rot_error/rot_gt * 100
-    return  T, T_gt, inlier, len(mkpts0), inlier_ratio, trans_error, rot_error, trans_error_percent, rot_error_percent
+    return  T, inlier, inlier_ratio, trans_error, rot_error
 
 def solve_icp(P, Q):
     """
@@ -115,8 +148,8 @@ def solve_icp(P, Q):
 
 def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, matches, mconf, true_positive, false_positive, T, radius):
 	
-    pc0 = pc0[pc0[:,2]>-3]
-    pc1 = pc1[pc1[:,2]>-3]
+    pc0 = pc0[pc0[:,2]>-5]
+    pc1 = pc1[pc1[:,2]>-5]
     # pc0 = mkpts0[mkpts0[:,2]>-4]
     # pc1 = mkpts1[mkpts1[:,2]>-4]
     pcd_source_keypoints, pcd_target_keypoints = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
@@ -137,7 +170,7 @@ def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, mat
     pcd_source_keypoints3, pcd_target_keypoints3 = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
     pcd_source_keypoints3.points, pcd_target_keypoints3.points = o3d.utility.Vector3dVector(pc0[:,:3]), o3d.utility.Vector3dVector(pc1[:,:3])
 
-    translation = np.asarray([0, 40, 0])
+    translation = np.asarray([0, 50, 0])
     pcd_source_keypoints_shifted = pcd_source_keypoints.translate(translation)
     pcd_target_keypoints_shifted = pcd_target_keypoints.translate(-translation)
     translation2 = np.asarray([300, 0, 0])
@@ -212,19 +245,20 @@ def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, mat
     line_mesh4_geoms = correspondence_mesh4.cylinder_segments
 
     ## draw keypoints with sphere
+    radius = 0.8
     box_list1 = []
     for i in range(kpts0.shape[0]):
-        mesh_box = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
         mesh_box.translate(kpts0[i].reshape([3, 1]))
         mesh_box.translate(translation)
         mesh_box.paint_uniform_color([1, 0, 0])
 
-        mesh_box2 = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box2 = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
         mesh_box2.translate(kpts0[i].reshape([3, 1]))
         mesh_box2.translate(translation+translation2)
         mesh_box2.paint_uniform_color([1, 0, 0])
 
-        mesh_box3 = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box3 = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
         mesh_box3.translate(kpts0[i].reshape([3, 1]))
         mesh_box3.translate(translation+translation3)
         mesh_box3.paint_uniform_color([1, 0, 0])
@@ -234,17 +268,17 @@ def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, mat
     
     box_list2 = []
     for i in range(kpts1.shape[0]):
-        mesh_box = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
         mesh_box.translate(kpts1[i].reshape([3, 1]))
         mesh_box.translate(-translation)
         mesh_box.paint_uniform_color([1, 0, 0])
 
-        mesh_box2 = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box2 = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
         mesh_box2.translate(kpts1[i].reshape([3, 1]))
         mesh_box2.translate(-translation+translation2)
         mesh_box2.paint_uniform_color([1, 0, 0])
 
-        mesh_box3 = o3d.geometry.TriangleMesh.create_sphere(radius=0.5)
+        mesh_box3 = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
         mesh_box3.translate(kpts1[i].reshape([3, 1]))
         mesh_box3.translate(-translation+translation3)
         mesh_box3.paint_uniform_color([1, 0, 0])
@@ -254,7 +288,9 @@ def plot_match(pc0, pc1, kpts0, kpts1, mkpts0, mkpts1, mkpts0_gt, mkpts1_gt, mat
     
     ## draw line with triangular mesh
     o3d.visualization.draw_geometries([
-                                        pcd_source_keypoints_shifted, *line_mesh_geoms, pcd_keypoints, pcd_target_keypoints_shifted, 
+                                        pcd_source_keypoints_shifted, 
+                                        # *line_mesh_geoms, 
+                                        pcd_keypoints, pcd_target_keypoints_shifted, 
                                         pcd_source_keypoints_shifted2, *line_mesh2_geoms, pcd_keypoints2, pcd_target_keypoints_shifted2, 
                                         pcd_source_keypoints_shifted3, *line_mesh3_geoms, *line_mesh4_geoms, pcd_keypoints3, pcd_keypoints4,  pcd_target_keypoints_shifted3, 
                                         ]+box_list1+ box_list2)

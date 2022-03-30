@@ -54,10 +54,16 @@ python3 train.py
 
 ### Test
 
-For quick test, we provide a pre-trained model in ./pre-trained. Run the following command:
+For quick test, we provide a pre-trained model in ./pre-trained. To reproduce the results of this paper, run the following command:
 
 ```sh
 python3 test.py
+```
+
+We also provide another script 'test_registration_metric.py' following common practice[[1](https://github.com/chrischoy/FCGF),[2](https://github.com/XuyangBai/D3Feat)]. Run the following command:
+
+```sh
+python3 test_registration_metric.py
 ```
 
 
@@ -77,3 +83,15 @@ The true matches are colored by green, the false match are colored by red, and t
 ## License
 
 This project is free software made available under the MIT License. For details see the LICENSE file.
+
+
+
+## References
+
+[1] D3Feat: Joint Learning of Dense Detection and Description of 3D Local Features, Xuyang Bai, Zixin Luo, Lei Zhou, Hongbo Fu, Long Quan and Chiew-Lan Tai, CVPR 2020.
+
+[2] Fully Convolutional Geometric Features, Christopher Choy and Jaesik Park and Vladlen Koltun, ICCV 2019.
+
+[3] Superglue: Learning feature matching with graph neural networks, P.E. Sarlin, D. Detone, T. Malisiewicz, and A. Rabinovich, CVPR 2020
+
+[4] Usip: Unsupervised stable interest point detection from 3d point clouds, J.X. Li and G.H. Lee, ICCV 2019

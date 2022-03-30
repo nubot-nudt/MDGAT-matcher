@@ -6,7 +6,6 @@ from torch.utils.data import Dataset
 import open3d as o3d 
 from sklearn.neighbors import KDTree
 import time
-
 def load_kitti_gt_txt(txt_root, seq):
     '''
     :param txt_root:
@@ -67,6 +66,7 @@ class SparseDataset(Dataset):
         self.calib={}
         self.pose={}
         self.pc = {}
+        
         for seq in self.seq_list:
             sequence = '%02d'%seq
             calibpath = os.path.join(self.train_path, 'calib/sequences', sequence, 'calib.txt')
@@ -109,7 +109,9 @@ class SparseDataset(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        
+        # d=[9,236,390,259,1048,171,395,296]
+        # d=[259,296]
+        # idx=d[idx]
         index_in_seq = self.dataset[idx]['anc_idx']
         index_in_seq2 = self.dataset[idx]['pos_idx']
         seq = self.dataset[idx]['seq']
@@ -233,6 +235,7 @@ class SparseDataset(Dataset):
         kp2_np = torch.tensor(kp2_np, dtype=torch.double)
         pose2 = torch.tensor(pose2, dtype=torch.double)
         T_cam0_velo = torch.tensor(T_cam0_velo, dtype=torch.double)
+        T_gt = torch.einsum('ab,bc,cd,de->ae', torch.inverse(T_cam0_velo), torch.inverse(pose1), pose2, T_cam0_velo) # T_gt: transpose kp2 to kp1
 
         '''transform pose from cam0 to LiDAR'''
         kp1w_np = torch.einsum('ki,ij,jm->mk', pose1, T_cam0_velo, kp1_np.T)
@@ -291,6 +294,8 @@ class SparseDataset(Dataset):
         descs1, descs2 = torch.tensor(descs1, dtype=torch.double), torch.tensor(descs2, dtype=torch.double)
         scores1_np, scores2_np = torch.tensor(scores1_np, dtype=torch.double), torch.tensor(scores2_np, dtype=torch.double)
 
+        
+
         return{
             # 'skip': False,
             'keypoints0': kp1_np,
@@ -299,14 +304,15 @@ class SparseDataset(Dataset):
             'descriptors1': descs2,
             'scores0': scores1_np,
             'scores1': scores2_np,
-            'match0': match1,
-            'match1': match2,
+            'gt_matches0': match1,
+            'gt_matches1': match2,
             'sequence': sequence,
             'idx0': index_in_seq,
-            'idx1': index_in_seq2,
-            'pose1': pose1,
-            'pose2': pose2,
-            'T_cam0_velo': T_cam0_velo,
+            # 'idx1': index_in_seq2,
+            # 'pose1': pose1,
+            # 'pose2': pose2,
+            # 'T_cam0_velo': T_cam0_velo,
+            'T_gt': T_gt,
             # 'cloud0': pc1,
             # 'cloud1': pc2,
             # 'all_matches': list(all_matches),
