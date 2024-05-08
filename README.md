@@ -1,6 +1,6 @@
 # MDGAT-matcher for 3D point cloud registration
 
-This repo contains the code for our RAL2021 paper, [**Keypoint Matching for Point Cloud Registration Using Multiplex Dynamic Graph Attention Networks**](https://www.researchgate.net/publication/353330868_Keypoint_Matching_for_Point_Cloud_Registration_Using_Multiplex_Dynamic_Graph_Attention_Networks).
+This repo contains the code for our RAL2021 paper, [**Keypoint Matching for Point Cloud Registration Using Multiplex Dynamic Graph Attention Networks**](https://www.researchgate.net/publication/353330868_Keypoint_Matching_for_Point_Cloud_Registration_Using_Multiplex_Dynamic_Graph_Attention_Networks). [[IEEE](https://ieeexplore.ieee.org/abstract/document/9484762)]
 
 In this paper, we propose a novel and flexible graph network architecture to tackle the keypoint matching problem in an end-to-end fashion. This repo includes PyTorch code for training and testing out MDGAT-matcher network on top of [USIP](https://github.com/lijx10/USIP) keypoints and FPFH descriptors.
 
